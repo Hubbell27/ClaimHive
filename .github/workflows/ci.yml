@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: claimhive_owner
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: claimhive_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U claimhive_owner" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Synthetic data only. The owner role runs migrations; tests connect as the
+      # non-owner app role so row-level security is exercised for real.
+      TEST_MIGRATION_DATABASE_URL: postgresql://claimhive_owner@localhost:5432/claimhive_test
+      TEST_DATABASE_URL: postgresql://claimhive_app@localhost:5432/claimhive_test
+      MIGRATION_DATABASE_URL: postgresql://claimhive_owner@localhost:5432/claimhive_test
+      DATABASE_URL: postgresql://claimhive_app@localhost:5432/claimhive_test
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      - name: Typecheck
+        run: npm run lint
+      - name: Tests (real Postgres, RLS, encryption, audit, auth)
+        run: npm test
+      - name: Production build
+        run: npm run build

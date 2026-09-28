@@ -1,0 +1,9 @@
+node_modules/
+.next/
+src/generated/
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+tsconfig.tsbuildinfo

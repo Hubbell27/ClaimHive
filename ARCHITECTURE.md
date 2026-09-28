@@ -1,0 +1,204 @@
+# ClaimHive architecture
+
+This document describes what exists (Phase 1) and the reasoning behind it. It is
+updated at the end of every phase.
+
+## System overview
+
+```
+ Browser ──HTTPS──▶ Next.js (App Router, server components + server actions)
+                      │  session cookie → user → membership → role → permission
+                      │  withPractice(practiceId): one transaction, app.practice_id set
+                      ▼
+                 PostgreSQL ◀── pg-boss worker (same DB, schema "pgboss")
+                   • row-level security on every PHI table
+                   • PHI columns stored as AES-256-GCM ciphertext
+                   • append-only audit_events
+```
+
+- **One Next.js app** serves the practice UI (`/app/*`), the ClaimHive staff
+  console (`/admin`) and a few route handlers (`/api/*`). Mutations are server
+  actions, so there's no separate public API to secure yet.
+- **One worker process** (`npm run worker`) handles background jobs from
+  pg-boss. Job payloads hold ids and options only, never PHI.
+- **One PostgreSQL database.** It holds the jobs too, so there's no Redis to run,
+  and jobs can be enqueued inside the same transaction as the data they refer to.
+
+Source layout:
+
+| Path | Purpose |
+|---|---|
+| `prisma/schema.prisma`, `prisma/migrations/` | Data model; security migration (RLS, grants, triggers) |
+| `src/lib/crypto.ts` | Key hierarchy, field encryption, lookup index |
+| `src/lib/db.ts` | Prisma client; `withPractice` tenant context |
+| `src/lib/auth/*` | Passwords, TOTP, sessions, RBAC |
+| `src/lib/audit.ts`, `src/lib/logger.ts` | Audit trail; PHI-free logging |
+| `src/lib/phi.ts` | The only module that reads or writes patient identifiers (always audited) |
+| `src/lib/money.ts` | Dollar figures shown on the dashboard |
+| `src/lib/synthetic/*` | Synthetic data generator and loader |
+| `src/lib/actions/*` | Server actions (auth, practice, admin) |
+| `src/worker/` | Background job worker |
+| `tests/` | Vitest suites that run against a real PostgreSQL |
+
+## Tenancy: one database with row-level security
+
+Every PHI table (`patients`, `claims`, `claim_lines`, `denials`) has a
+`practice_id` and a `FORCE`d RLS policy:
+
+```sql
+USING (practice_id = app_practice_id()) WITH CHECK (practice_id = app_practice_id())
+```
+
+- `app_practice_id()` reads the transaction-local setting `app.practice_id`.
+  `withPractice()` sets it with `set_config(..., true)` at the start of a
+  transaction, so the setting can't leak to another request that reuses the
+  pooled connection.
+- **No context means no rows.** Forgetting `withPractice` fails closed.
+- The app connects as `claimhive_app`, which isn't the table owner, isn't a
+  superuser and doesn't have `BYPASSRLS`. The migration role owns the tables,
+  and `FORCE` applies the policies to it as well.
+- **There's no admin bypass.** ClaimHive staff manage practices, and later the
+  de-identified pool and billing. No application path lets them read a
+  practice's PHI. Platform admin accounts can't hold memberships:
+  `create-admin`, invites and practice creation all refuse, and
+  `requirePractice` redirects any admin as a last line of defense.
+- Triggers reject a child row whose `practice_id` differs from its parent's
+  (claim line or denial vs. claim, claim vs. patient). Under RLS, another
+  practice's parent row is invisible, so the check can't be fooled.
+- Tests assert all of this against a real database (`tests/tenancy.test.ts`).
+
+**Why not a schema or database per practice?** Small practices mean thousands of
+tenants. RLS keeps migrations and pooled analytics simple, and the database
+enforces isolation even when the application code has a bug.
+
+## Users, memberships and roles
+
+- A **user** is a person. A **membership** links a user to a practice with a
+  role, so one biller can serve several practices. After sign-in, the user
+  chooses the active practice, which is stored on the server-side session.
+- Roles: **owner** has every practice permission (team, audit log, pool
+  opt-in, patients, dashboard). **biller** can work with patients, claims and
+  the dashboard, but can't manage the team, see the audit log or change pool
+  settings. Permissions are checked on the server in `requirePractice(permission)`;
+  the UI hiding links is only a convenience. A denial is audited and shows a
+  plain "for practice owners" page.
+- **Platform admin** is a flag on the user (ClaimHive staff), kept separate
+  from practice roles.
+
+## Authentication
+
+- **Passwords:** argon2id (OWASP parameters, `@node-rs/argon2`). New accounts
+  get a one-time temporary password and must change it after MFA. Unknown
+  emails still hash against a dummy value so response timing matches.
+- **MFA is mandatory:** RFC 6238 TOTP, enrolled at first sign-in with a QR code
+  and a manual key. The secret is sealed with a platform key bound to the user
+  id. Each 30-second step can be used only once, enforced by an atomic
+  conditional update, so a replayed code fails even under concurrency.
+- **Lockout:** 5 failures (password or code) lock the account for 15 minutes.
+  The counter is incremented atomically.
+- **Sessions:** a random 256-bit token is kept in an `HttpOnly`, `SameSite=Lax`
+  cookie (`Secure` in production); the database stores only its SHA-256.
+  Sessions time out after 15 minutes idle and 12 hours absolute. Changing a
+  password revokes the user's other sessions.
+- **CSRF:** server actions check `Origin` against `Host`. `Referrer-Policy` is
+  `same-origin`, because `no-referrer` makes browsers send `Origin: null` and
+  that breaks the check.
+
+## Encryption
+
+Key hierarchy:
+
+```
+master key (KeyProvider: local in development, AWS KMS in production)
+ ├── wraps each practice's 256-bit DEK   (practices.data_key_wrapped)
+ │     ├── HKDF → field-encryption key   (AES-256-GCM)
+ │     └── HKDF → lookup-index key       (HMAC-SHA-256)
+ └── HKDF → platform key                 (TOTP secrets, other platform secrets)
+```
+
+- **Field-level:** patient names, date of birth, member ID and claim number are
+  stored as `version | nonce | ciphertext+tag`. The associated data
+  `practice:table:column:row` binds each value to its exact place, so a value
+  copied to another row, column or practice fails to decrypt.
+- **Lookup without decrypting:** `lookup_index` is an HMAC of normalized
+  last name + DOB under the practice's own index key. The same patient gets
+  unrelated index values at different practices.
+- **At rest:** RDS storage encryption (deployment phase), on top of the field
+  encryption. **In transit:** TLS everywhere, HSTS, and TLS required on the
+  database connection in AWS.
+- `KEY_PROVIDER=local` is refused whenever `isRealDeployment()` is true.
+  `APP_ENV=local` is the only way to run a production build with local keys.
+- Unwrapped DEKs are cached in memory for up to 5 minutes.
+
+## Audit log
+
+- `audit_events` records every patient view, list, create, edit and export; every
+  sign-in step (success and failure); every permission denial; and every
+  practice, member and admin action. Each event has the actor, practice,
+  resource, outcome, IP (the rightmost `X-Forwarded-For` entry behind the ALB),
+  user agent and request id.
+- It is **append-only**: `UPDATE`/`DELETE`/`TRUNCATE` are revoked from the app
+  role, and triggers reject them for every role, owner included.
+- Events are written outside the caller's transaction, so a failed or denied
+  action is still recorded.
+- `details` holds ids, counts, field names and reasons only, never PHI.
+
+## Logs and errors without PHI
+
+- `src/lib/logger.ts` keeps only an allowlist of structured fields. String
+  values are scrubbed of anything shaped like an email, phone number, SSN, date
+  or long ID. Errors are logged by class and a scrubbed message, never with
+  request bodies or arguments.
+- Users see a generic error with a reference (Next.js error digest), never
+  internal details.
+- Tested in `tests/logging.test.ts`.
+
+## Synthetic data
+
+Only synthetic data is used in development and tests. `src/lib/synthetic/generator.ts`
+is deterministic for a given seed and produces:
+
+- 7 **fictional** payers, clearly marked `is_synthetic` and using `SYN` ids
+- practices, patients (Faker, `SYN`-prefixed member IDs), claims, claim lines
+  and denials over a configurable window
+- **Hidden denial rules** (R1–R7), for example "Summit Dental Mutual denies
+  D4341 without a perio chart 78% of the time (CARC 16 / N706)". Each rule has
+  appeal win rates with and without the fix. They give later phases (pattern
+  detection, pre-submission checks) a known ground truth to recover.
+
+Synthetic loading refuses to run in a real deployment. The guard is inside
+`loadSyntheticDataset`, so every path (seed script, admin button, worker) is
+covered.
+
+## Money figures
+
+`src/lib/money.ts` computes, for the last 12 months: dollars denied, still
+recoverable (denied, no appeal decision yet, within 180 days), recovered on
+appeal, lost for good, and the biggest causes by payer and reason code. The
+dashboard leads with these numbers ("always show the money").
+
+## Reference codes
+
+`src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
+own short paraphrases. The official CDT descriptors are copyrighted by the ADA
+and need a license before production use.
+
+## Decisions log
+
+| Decision | Choice | Why |
+|---|---|---|
+| Repository | Separate from the patient intake app | Different product, tenants and compliance surface. Integrate later over an API |
+| Tenancy | Shared DB + Postgres RLS | Scales to many small practices; isolation enforced by the database |
+| Auth | Built-in accounts + TOTP | No third-party identity provider holding user data; MFA required |
+| Jobs | pg-boss on Postgres | No extra infrastructure; transactional enqueue |
+| Multi-practice users | Memberships | Billing services work for several practices |
+| De-identification (Phase 3) | HIPAA Safe Harbor | Clear, auditable rule set |
+| Pooling | Explicit opt-in by the owner | Consent is clear and recorded (who, when) |
+| AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
+
+## Not yet built (by phase)
+
+2. Data ingestion. 3. De-identification and the pool (Safe Harbor pipeline,
+onboarding opt-in step). 4. Denial intelligence engine. 5. Pre-submission claim
+check. 6. Appeal generator. 7. Recovery tracking and billing. 8. Pilot
+readiness (AWS under a BAA, KMS, the pilot checklist in the README).

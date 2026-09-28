@@ -1,0 +1,24 @@
+/**
+ * Background jobs (pg-boss on the same PostgreSQL). Payloads carry ids and
+ * options only, never PHI.
+ */
+import { PgBoss } from "pg-boss";
+
+export const QUEUES = { syntheticGenerate: "synthetic.generate" } as const;
+
+const g = globalThis as unknown as { boss?: Promise<PgBoss> };
+
+export function boss(): Promise<PgBoss> {
+  g.boss ??= (async () => {
+    // The `pgboss` schema is created by a migration and owned by the app role, which
+    // (deliberately) has no CREATE privilege on the database.
+    const b = new PgBoss({ connectionString: process.env.DATABASE_URL!, schema: "pgboss", createSchema: false });
+    b.on("error", () => undefined);
+    await b.start();
+    for (const q of Object.values(QUEUES)) await b.createQueue(q);
+    return b;
+  })();
+  return g.boss;
+}
+
+export interface SyntheticJob { practices: number; patientsPerPractice: number; seed: number; requestedBy: string }

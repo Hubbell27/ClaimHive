@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #b45309;
+  --color-brand-dark: #92400e;
+  --color-ink: #1c1917;
+  --color-money-lost: #b91c1c;
+  --color-money-saved: #15803d;
+}
+
+body { @apply bg-stone-50 text-ink antialiased; }
+@utility btn { @apply inline-flex items-center justify-center rounded-lg px-4 py-2 font-semibold min-h-11; }
+@utility btn-primary { @apply btn bg-brand text-white hover:bg-brand-dark; }
+@utility btn-secondary { @apply btn border border-stone-300 bg-white hover:bg-stone-100; }
+@utility card { @apply rounded-xl border border-stone-200 bg-white p-5 shadow-sm; }
+@utility field { @apply block w-full rounded-lg border border-stone-300 px-3 py-2 min-h-11; }
+@utility label { @apply block text-sm font-semibold mb-1; }

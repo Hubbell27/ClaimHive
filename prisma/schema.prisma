@@ -1,0 +1,229 @@
+// ClaimHive data model.
+//
+// Tenant tables (practice_id NOT NULL) are protected by PostgreSQL row-level
+// security (see prisma/migrations/*_security/migration.sql): a query only sees
+// rows for the practice set in the transaction via `app.practice_id`.
+// Direct identifiers are stored only as AES-256-GCM ciphertext (*_enc columns)
+// under a per-practice data key; see src/lib/crypto.ts.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  owner
+  biller
+}
+
+enum PlanType {
+  PPO
+  DHMO
+  INDEMNITY
+  MEDICAID
+  MEDICARE_ADVANTAGE
+}
+
+enum ClaimStatus {
+  draft
+  submitted
+  paid
+  partially_paid
+  denied
+}
+
+enum AppealStatus {
+  none
+  drafted
+  sent
+  won
+  lost
+}
+
+// ---------------------------------------------------------------- identity
+
+model User {
+  id                 String       @id @default(uuid()) @db.Uuid
+  email              String       @unique
+  name               String
+  passwordHash       String       @map("password_hash")
+  isPlatformAdmin    Boolean      @default(false) @map("is_platform_admin")
+  totpSecretEnc      Bytes?       @map("totp_secret_enc")
+  totpEnabled        Boolean      @default(false) @map("totp_enabled")
+  totpLastStep       BigInt?      @map("totp_last_step")
+  failedLogins       Int          @default(0) @map("failed_logins")
+  lockedUntil        DateTime?    @map("locked_until") @db.Timestamptz
+  mustChangePassword Boolean      @default(true) @map("must_change_password")
+  disabledAt         DateTime?    @map("disabled_at") @db.Timestamptz
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  lastLoginAt        DateTime?    @map("last_login_at") @db.Timestamptz
+  memberships        Membership[]
+  sessions           Session[]
+
+  @@map("users")
+}
+
+model Practice {
+  id             String       @id @default(uuid()) @db.Uuid
+  name           String
+  state          String       @db.Char(2) // US state; the only location detail ever pooled
+  // Per-practice data-encryption key, wrapped by the master key (KMS in AWS).
+  dataKeyWrapped Bytes        @map("data_key_wrapped")
+  poolOptIn      Boolean      @default(false) @map("pool_opt_in")
+  poolOptInAt    DateTime?    @map("pool_opt_in_at") @db.Timestamptz
+  poolOptInBy    String?      @map("pool_opt_in_by") @db.Uuid
+  isSynthetic    Boolean      @default(false) @map("is_synthetic")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  memberships    Membership[]
+
+  @@map("practices")
+}
+
+model Membership {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  practiceId String   @map("practice_id") @db.Uuid
+  role       Role
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  practice   Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, practiceId])
+  @@map("memberships")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  // SHA-256 of the random cookie token; the token itself is never stored.
+  tokenHash        String    @unique @map("token_hash")
+  userId           String    @map("user_id") @db.Uuid
+  mfaVerified      Boolean   @default(false) @map("mfa_verified")
+  activePracticeId String?   @map("active_practice_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  lastSeenAt       DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// ---------------------------------------------------------------- audit
+
+// Append-only (DB trigger rejects UPDATE/DELETE/TRUNCATE). No PHI in details.
+model AuditEvent {
+  id           BigInt   @id @default(autoincrement())
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz
+  actorUserId  String?  @map("actor_user_id") @db.Uuid
+  actorEmail   String?  @map("actor_email")
+  practiceId   String?  @map("practice_id") @db.Uuid
+  action       String
+  resourceType String?  @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  outcome      String   @default("success")
+  ip           String?
+  userAgent    String?  @map("user_agent")
+  requestId    String?  @map("request_id")
+  details      Json     @default("{}")
+
+  @@index([practiceId, occurredAt])
+  @@index([actorUserId, occurredAt])
+  @@map("audit_events")
+}
+
+// ---------------------------------------------------------------- reference (global, no PHI)
+
+model Payer {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String  @unique
+  payerCode String  @unique @map("payer_code")
+  isSynthetic Boolean @default(false) @map("is_synthetic")
+  claims    Claim[]
+
+  @@map("payers")
+}
+
+// ---------------------------------------------------------------- tenant data (PHI; RLS)
+
+model Patient {
+  id           String   @id @default(uuid()) @db.Uuid
+  practiceId   String   @map("practice_id") @db.Uuid
+  firstNameEnc Bytes    @map("first_name_enc")
+  lastNameEnc  Bytes    @map("last_name_enc")
+  dobEnc       Bytes    @map("dob_enc")
+  memberIdEnc  Bytes?   @map("member_id_enc")
+  // Keyed hash of normalized last name + DOB for lookup without plaintext.
+  lookupIndex  String   @map("lookup_index")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  claims       Claim[]
+
+  @@index([practiceId, lookupIndex])
+  @@map("patients")
+}
+
+model Claim {
+  id              String       @id @default(uuid()) @db.Uuid
+  practiceId      String       @map("practice_id") @db.Uuid
+  patientId       String       @map("patient_id") @db.Uuid
+  payerId         String       @map("payer_id") @db.Uuid
+  planType        PlanType     @map("plan_type")
+  claimNumberEnc  Bytes?       @map("claim_number_enc")
+  serviceDate     DateTime     @map("service_date") @db.Date
+  submittedAt     DateTime?    @map("submitted_at") @db.Date
+  adjudicatedAt   DateTime?    @map("adjudicated_at") @db.Date
+  status          ClaimStatus
+  billedCents     Int          @map("billed_cents")
+  paidCents       Int          @default(0) @map("paid_cents")
+  // e.g. ["xray", "narrative", "perio_chart", "photo"]
+  attachments     String[]     @default([])
+  appealStatus    AppealStatus @default(none) @map("appeal_status")
+  recoveredCents  Int          @default(0) @map("recovered_cents")
+  isSynthetic     Boolean      @default(false) @map("is_synthetic")
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  patient         Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  payer           Payer        @relation(fields: [payerId], references: [id])
+  lines           ClaimLine[]
+  denials         Denial[]
+
+  @@index([practiceId, status])
+  @@index([practiceId, serviceDate])
+  @@map("claims")
+}
+
+model ClaimLine {
+  id         String  @id @default(uuid()) @db.Uuid
+  practiceId String  @map("practice_id") @db.Uuid
+  claimId    String  @map("claim_id") @db.Uuid
+  cdtCode    String  @map("cdt_code") @db.VarChar(5)
+  tooth      String? @db.VarChar(3)
+  surfaces   String? @db.VarChar(5)
+  feeCents   Int     @map("fee_cents")
+  paidCents  Int     @default(0) @map("paid_cents")
+  claim      Claim   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  denials    Denial[]
+
+  @@index([practiceId, cdtCode])
+  @@map("claim_lines")
+}
+
+model Denial {
+  id          String     @id @default(uuid()) @db.Uuid
+  practiceId  String     @map("practice_id") @db.Uuid
+  claimId     String     @map("claim_id") @db.Uuid
+  claimLineId String?    @map("claim_line_id") @db.Uuid
+  groupCode   String     @map("group_code") @db.VarChar(2) // CO, PR, OA, PI
+  carc        String     @db.VarChar(5)
+  rarc        String?    @db.VarChar(6)
+  amountCents Int        @map("amount_cents")
+  deniedAt    DateTime   @map("denied_at") @db.Date
+  claim       Claim      @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  claimLine   ClaimLine? @relation(fields: [claimLineId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId, carc])
+  @@map("denials")
+}
