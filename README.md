@@ -89,6 +89,7 @@ review, and is paid on a contingency of money recovered.
   - `infra/terraform` holds VPC, ECS Fargate, RDS, KMS, Secrets Manager, ALB + WAF, CloudWatch and CloudTrail (validated in CI, not yet applied);
   - a `Dockerfile` builds the image (built in CI);
   - the **AWS KMS key provider** (`KEY_PROVIDER=kms`) wraps each practice's key.
+- **Reason codes page:** every CARC, RARC and group code dental offices usually see (216), in plain English, each with what to do and whether it's worth appealing. Search by code (`16`, `CO-16`, `N706`) or by words (`x-ray`). It shows how often each code hit the practice in 12 months. Every code shown elsewhere (claims, claim page, Money, 12-month report) links to its entry
 - **Readiness:** `npm run readiness` / **Admin → Readiness** checks the deployment automatically (KMS, TLS, restricted role, RLS, audit log, no synthetic data, billing setup, AI BAA). [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md) lists everything a person must sign off
 
 ## Quick start (local, synthetic data)

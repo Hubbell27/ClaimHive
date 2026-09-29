@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CodeLink } from "@/components/CodeLink";
 import { audit } from "@/lib/audit";
 import { requirePractice } from "@/lib/auth/rbac";
 import { prisma, withPractice } from "@/lib/db";
@@ -46,7 +47,7 @@ export default async function ReportPage() {
               <tbody>{top.map((i) => (
                 <tr key={i.claimId} className="border-t align-top">
                   <td className="p-3"><Link className="underline" href={`/app/claims/${i.claimId}`}>{names.get(i.claimId)}</Link><span className="block text-xs text-stone-500">{i.cdtCodes.join(", ")}</span></td>
-                  <td className="py-3">{i.payer}<span className="block text-xs text-stone-500">{i.reason}</span></td>
+                  <td className="py-3">{i.payer}<span className="block text-xs text-stone-500"><CodeLink kind="carc" code={i.carc} group={i.group} />{i.rarc && <> / <CodeLink kind="rarc" code={i.rarc} /></>} {i.reason.replace(/^\S+\s?/, "")}</span></td>
                   <td className="py-3 whitespace-nowrap">{i.deniedAt}</td>
                   <td className="py-3 pr-3 text-right">{usd(i.deniedCents)}</td>
                   <td className="py-3 pr-3 text-right">{pct(i.likelihood)}<span className="block text-xs text-stone-500">{i.source === "pool" ? "measured" : "typical"}</span></td>

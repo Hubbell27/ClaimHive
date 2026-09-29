@@ -4,6 +4,7 @@ import { CARC } from "@/lib/reference/codes";
 import { resultsSummary } from "@/lib/results/ledger";
 import { last12 } from "@/lib/results/period";
 import Link from "next/link";
+import { CodeLink } from "@/components/CodeLink";
 
 const carcLabel = new Map(CARC.map((c) => [c.code, c.label]));
 
@@ -47,7 +48,7 @@ export default async function MoneyPage() {
             {m.topCauses.map((c) => (
               <tr key={`${c.payer}-${c.carc}`} className="border-t">
                 <td className="py-2">{c.payer}</td>
-                <td>{carcLabel.get(c.carc) ?? `Code ${c.carc}`} <span className="text-stone-400">({c.carc})</span></td>
+                <td>{carcLabel.get(c.carc) ?? `Code ${c.carc}`} <span className="text-stone-400">(<CodeLink kind="carc" code={c.carc} />)</span></td>
                 <td className="text-right">{c.count}</td>
                 <td className="text-right font-semibold text-money-lost">{usd(c.cents)}</td>
               </tr>

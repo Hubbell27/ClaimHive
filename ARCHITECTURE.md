@@ -522,9 +522,25 @@ A returned letter that uses a placeholder ClaimHive doesn't know fails as `unkno
 
 ## Reference codes
 
-`src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
-own short paraphrases. The official CDT descriptors are copyrighted by the ADA
-and need a license before production use.
+`src/lib/reference/codes.ts` has a CDT subset with ClaimHive's own short
+paraphrases. The official CDT descriptors are copyrighted by the ADA and need a
+license before production use.
+
+`src/lib/reference/reasons.ts` holds the reason codes:
+- the group codes (CO, PR, OA, PI);
+- about 130 CARCs and 70 RARCs that dental offices see.
+
+Each code has a plain-English label, a category (documentation, coverage,
+frequency, bundling and so on), whether it's usually worth appealing, and what
+to do. Most advice comes from the category; codes that need specific advice
+carry their own.
+
+The wording is ClaimHive's own summary, not X12's official text. A code outside
+the list is shown as "not in ClaimHive's list" with a link to x12.org.
+`CARC`/`RARC` in codes.ts are derived from this list, so every page, letter and
+report uses the same labels. `/app/codes` searches it by code (exact, then
+prefix, with or without a group prefix) or by words (name matches rank before
+advice matches). `CodeLink` links any code shown in the app to its entry.
 
 ## Decisions log
 

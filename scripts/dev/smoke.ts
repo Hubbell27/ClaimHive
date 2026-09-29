@@ -57,6 +57,11 @@ async function main() {
     await page.click(`button[value=${process.env.SMOKE_POOL === "no" ? "no" : "yes"}]`);
     await page.waitForURL("**/app");
   }
+  if (process.env.SMOKE_CODES) {
+    await codesFlow(page);
+    await browser.close();
+    return;
+  }
   if (process.env.SMOKE_SETUP) {
     await setupFlow(page);
     await browser.close();
@@ -378,6 +383,29 @@ async function setupFlow(page: import("playwright").Page) {
   console.log("setup after →", (await text()).slice(0, 200));
   const health = await page.request.get(`${base}/api/health`);
   console.log("health", health.status(), await health.text());
+}
+
+/** Reason codes: search, and follow a code link from a denied claim. */
+async function codesFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  await page.goto(`${base}/app/codes`);
+  if (shots) await page.screenshot({ path: `${shots}/codes.png`, fullPage: false });
+  await page.fill("input[name=q]", "x-ray");
+  await page.getByRole("button", { name: "Search" }).click();
+  await page.waitForURL(/q=x-ray/);
+  console.log("search x-ray →", (await text()).slice(0, 400));
+  if (shots) await page.screenshot({ path: `${shots}/codes-search.png`, fullPage: false });
+  await page.goto(`${base}/app/claims?status=denied`);
+  await page.locator("tbody a").first().click();
+  await page.waitForURL(/\/app\/claims\/[0-9a-f-]{36}$/);
+  const code = page.locator('a[href^="/app/codes?q="]').first();
+  console.log("claim code link:", await code.innerText(), await code.getAttribute("href"));
+  await code.click();
+  await page.waitForURL(/\/app\/codes/);
+  await page.waitForTimeout(800);
+  console.log("followed →", (await text()).slice(0, 300));
+  if (shots) await page.screenshot({ path: `${shots}/codes-from-claim.png`, fullPage: false });
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

@@ -8,6 +8,8 @@
  * here are likewise short paraphrases, not the official text.
  */
 
+import { REASON_CODES } from "./reasons";
+
 export interface CdtCode {
   code: string;
   label: string;
@@ -56,34 +58,9 @@ export interface ReasonCode {
   label: string;
 }
 
-/** Claim Adjustment Reason Codes (subset, paraphrased). */
-export const CARC: ReasonCode[] = [
-  { code: "4", label: "Procedure code inconsistent with modifier or missing modifier" },
-  { code: "16", label: "Claim lacks information or has submission/billing errors" },
-  { code: "18", label: "Exact duplicate claim or service" },
-  { code: "27", label: "Service after coverage ended" },
-  { code: "29", label: "Filing deadline passed" },
-  { code: "50", label: "Payer does not consider it medically necessary" },
-  { code: "96", label: "Non-covered charge" },
-  { code: "97", label: "Included in payment for another service (bundled)" },
-  { code: "119", label: "Benefit maximum reached" },
-  { code: "151", label: "Information does not support this many services (frequency)" },
-  { code: "197", label: "Prior authorization absent" },
-  { code: "204", label: "Not covered under the patient's current plan" },
-  { code: "252", label: "An attachment or other documentation is required" },
-];
-
-/** Remittance Advice Remark Codes (subset, paraphrased). */
-export const RARC: ReasonCode[] = [
-  { code: "N706", label: "Missing documentation" },
-  { code: "N705", label: "Incomplete or invalid documentation" },
-  { code: "M127", label: "Missing patient medical/dental record for this service" },
-  { code: "N130", label: "Check plan benefit documents for limits" },
-  { code: "N362", label: "Number of services exceeds what the plan allows" },
-  { code: "N30", label: "Patient ineligible for this service" },
-  { code: "N20", label: "Service not payable with other service on the same date" },
-  { code: "MA130", label: "Claim has incomplete or invalid information" },
-];
+/** Claim Adjustment Reason Codes and Remittance Advice Remark Codes: the full set, with plain-English help, is in reasons.ts. */
+export const CARC: ReasonCode[] = REASON_CODES.filter((x) => x.kind === "carc").map(({ code, label }) => ({ code, label }));
+export const RARC: ReasonCode[] = REASON_CODES.filter((x) => x.kind === "rarc").map(({ code, label }) => ({ code, label }));
 
 export const CARC_CODES = new Set(CARC.map((c) => c.code));
 export const RARC_CODES = new Set(RARC.map((c) => c.code));

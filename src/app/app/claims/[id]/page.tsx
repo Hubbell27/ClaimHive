@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppealForm } from "@/components/AppealForm";
+import { CodeLink } from "@/components/CodeLink";
 import { LetterRequestForm } from "@/components/LetterRequestForm";
 import { aiAllowed } from "@/lib/appeals/letters";
 import { RuleCard } from "@/components/RuleCard";
@@ -55,7 +56,7 @@ export default async function ClaimPage({ params }: { params: Promise<{ id: stri
               <td>{l.tooth}{l.surfaces ? ` ${l.surfaces}` : ""}</td>
               <td className="text-right">{usd(l.feeCents)}</td><td className="text-right">{usd(l.paidCents)}</td>
               <td className="p-3 text-xs">{c.denials.filter((d) => d.claimLineId === l.id).map((d) => (
-                <p key={d.id}><b>{d.groupCode}-{d.carc}</b> {carc.get(d.carc)}{d.rarc ? ` · ${d.rarc} ${rarc.get(d.rarc) ?? ""}` : ""}</p>
+                <p key={d.id}><b><CodeLink kind="carc" code={d.carc} group={d.groupCode} /></b> {carc.get(d.carc)}{d.rarc && <> · <CodeLink kind="rarc" code={d.rarc} /> {rarc.get(d.rarc) ?? ""}</>}</p>
               ))}</td>
             </tr>))}</tbody>
         </table>

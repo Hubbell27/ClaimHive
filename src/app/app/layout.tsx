@@ -35,6 +35,7 @@ export default async function PracticeLayout({ children }: { children: React.Rea
           Review{toReview > 0 && <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-xs text-white">{toReview}</span>}
         </Link>
         <Link href="/app/pool" className="font-medium">Insurer patterns</Link>
+        <Link href="/app/codes" className="font-medium">Reason codes</Link>
         <Link href="/app/patients" className="font-medium">Patients</Link>
         {owner && <Link href="/app/members" className="font-medium">Team</Link>}
         {owner && <Link href="/app/audit" className="font-medium">Audit log</Link>}

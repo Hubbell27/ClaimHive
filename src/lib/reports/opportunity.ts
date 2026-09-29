@@ -44,7 +44,7 @@ const BASIC_CAUSES: { key: string; carcs: string[]; title: string; fix: string; 
 
 export interface RecoverableItem {
   claimId: string; claimRef: string; payer: string; serviceDate: string; deniedAt: string; daysLeft: number;
-  deniedCents: number; cdtCodes: string[]; reason: string; likelihood: number; source: "pool" | "typical"; expectedCents: number; fix: string;
+  deniedCents: number; cdtCodes: string[]; reason: string; group: string; carc: string; rarc: string | null; likelihood: number; source: "pool" | "typical"; expectedCents: number; fix: string;
 }
 export interface PreventableGroup {
   key: string; title: string; fix: string; source: "pool" | "basic"; payer?: string; claims: number; deniedCents: number; avoidableCents: number; evidence?: string;
@@ -108,6 +108,7 @@ export async function opportunityReport(practiceId: string, now = new Date()): P
       deniedAt: first.deniedAt.toISOString().slice(0, 10), // (a denial dated after today counts from today)
       daysLeft: Math.min(APPEAL_WINDOW_DAYS, Math.ceil((deadline - now.getTime()) / DAY)), deniedCents: denied,
       cdtCodes: [...new Set(c.lines.filter((l) => c.denials.some((d) => d.claimLineId === l.id)).map((l) => l.cdtCode))],
+      group: first.groupCode, carc: first.carc, rarc: first.rarc,
       reason: `${first.groupCode}-${first.carc}${carcLabel.get(first.carc) ? ` ${carcLabel.get(first.carc)}` : ""}`,
       likelihood, source: pooled ? "pool" : "typical", expectedCents: Math.round(denied * likelihood),
       fix: m ? `${m.text.fix}${m.text.appeal ? ` ${m.text.appeal}` : ""}` : t[2],

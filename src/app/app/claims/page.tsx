@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CodeLink } from "@/components/CodeLink";
 import { audit } from "@/lib/audit";
 import { requirePractice } from "@/lib/auth/rbac";
 import { withPractice } from "@/lib/db";
@@ -49,7 +50,9 @@ export default async function ClaimsPage({ searchParams }: { searchParams: Promi
                 <td className="text-right">{usd(c.billedCents)}</td>
                 <td className="text-right">{usd(c.paidCents)}</td>
                 <td>{STATUS_TEXT[c.status]}{c.appealStatus === "won" ? <span className="ml-1 text-money-saved">· recovered {usd(c.recoveredCents)}</span> : null}</td>
-                <td className="text-xs">{[...new Set(c.denials.map((d) => `${d.carc}${d.rarc ? `/${d.rarc}` : ""}`))].join(", ")}</td>
+                <td className="text-xs">{[...new Map(c.denials.map((d) => [`${d.carc}/${d.rarc ?? ""}`, d])).values()].map((d, i) => (
+                  <span key={i}>{i > 0 && ", "}<CodeLink kind="carc" code={d.carc} />{d.rarc && <>/<CodeLink kind="rarc" code={d.rarc} /></>}</span>
+                ))}</td>
                 <td className="max-w-xs text-xs">{(matches.get(c.id) ?? []).slice(0, 1).map((m) => (
                   <Link key={m.rule.key} href={`/app/claims/${c.id}`} className="block rounded bg-amber-50 p-1.5 text-amber-900 hover:bg-amber-100">
                     <b>{m.text.title}.</b> {m.text.appeal ?? m.text.fix}
