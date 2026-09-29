@@ -49,8 +49,8 @@ export async function ensureSyntheticPayers(): Promise<Map<string, string>> {
   for (const p of SYNTHETIC_PAYERS) {
     const row = await prisma().payer.upsert({
       where: { payerCode: p.payerCode },
-      create: { name: p.name, payerCode: p.payerCode, isSynthetic: true },
-      update: {},
+      create: { name: p.name, payerCode: p.payerCode, isSynthetic: true, verified: true },
+      update: { verified: true },
     });
     ids.set(p.payerCode, row.id);
   }

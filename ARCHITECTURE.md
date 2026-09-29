@@ -1,6 +1,6 @@
 # ClaimHive architecture
 
-This document describes what exists (Phases 1–2) and the reasoning behind it.
+This document describes what exists (Phases 1–3) and the reasoning behind it.
 It is updated at the end of every phase.
 
 ## System overview
@@ -37,6 +37,7 @@ Source layout:
 | `src/lib/money.ts` | Dollar figures shown on the dashboard |
 | `src/lib/ingest/*` | Importers (aging, 835, 837D, EOB PDF), merge, pipeline |
 | `src/lib/results/*` | Results ledger, reporting periods, monthly PDF |
+| `src/lib/pool/*` | De-identification, the pool store (own role), sync/opt-in/opt-out, contributor-only insights |
 | `src/lib/synthetic/*` | Synthetic data generator and loader |
 | `src/lib/actions/*` | Server actions (auth, practice, admin, imports) |
 | `src/worker/` | Background job worker |
@@ -259,6 +260,74 @@ invoices all read this one table, so they can't disagree.
 The **Results** page and the **monthly PDF** show no patient details
 (claim references are ClaimHive's own ids), so an office can share them.
 
+## The de-identified pool (Phase 3)
+
+```
+practice data (public schema, RLS)                       pool schema (no practice or patient data)
+  claims ──▶ toPoolRecord (allowlist) ──▶ assertSafeHarbor ──▶ pool.claims / pool.claim_lines
+     ▲ claims.pool_record_id (random)                           contributor = random practice token
+  app role: no access to pool.*                                 pool role: no access to public.*
+```
+
+**What's shared** (and nothing else): the payer, the plan type, the region (the
+practice's state), CDT codes, attachments present, denial codes (group-CARC and
+RARC, per procedure), the outcome (pending, paid, partially paid, denied, appeal
+won, appeal lost), and days to payment. Days to payment is a whole-day interval,
+capped at 730; no date of any kind is kept.
+
+**Safe Harbor, identifier by identifier** (`src/lib/pool/deidentify.ts`):
+- Names, contact details, SSNs, record/plan/account numbers and every other
+  direct identifier are never read into a pool record. Records are *built*
+  from an allowlist, never copied and filtered.
+- Geography goes no smaller than the state. Dates and ages aren't included.
+- The pool record id and the contributor token are random UUIDs, not derived
+  from any patient or practice data (164.514(c)). Only the practice's own RLS
+  tenant row (`claims.pool_record_id`) links back, which is what lets a changed
+  claim replace its record and an opt-out remove everything.
+- An insurer is named only if **verified**: it arrived with an X12 payer ID
+  (835/837) or is curated. A spreadsheet's carrier column never verifies one,
+  so a mis-mapped column can't put a person's name in the pool. Claims with
+  unverified insurers are held back and counted on the Settings page.
+- `assertSafeHarbor` re-checks the exact key set and every value (UUIDs, a US
+  state, CDT/CARC/RARC formats, the payer-name shape, the day range) before
+  any write. The pool tables repeat the same rules as CHECK constraints.
+
+**Isolation:**
+- The pool lives in its own schema, reached only as `claimhive_pool`
+  (`POOL_DATABASE_URL`). That role can read, insert and delete pool rows and
+  can touch nothing in `public`. The app role has no access to `pool`, so the
+  two can't be joined in SQL.
+- Rows are never updated in place: a changed claim is deleted and re-inserted.
+- The pool can move to a separate database or account at deployment without
+  code changes.
+- A future hardening step is to split the role into a read-only one for the
+  web app and a writer for the worker.
+
+**Consent and lifecycle** (`sync.ts`):
+- **Onboarding:** a practice owner is asked once, before using the app, with
+  the exact text in `PoolExplainer`. Their yes or no is recorded with the time
+  and the consent version (`POOL_CONSENT_VERSION`). Billers are never asked.
+  The choice can be changed in Settings.
+- **Opt in:** a random contributor token is issued and the last 12 months are
+  shared (by date of service, counted from the opt-in date). After every
+  import or review, a `pool.sync` job re-shares changed claims. Linking a claim
+  uses raw SQL, so it doesn't bump `updated_at`.
+- **Opt out:** sharing stops first. Every record under the token is then
+  deleted and the deletion verified, the claim links are cleared, and the token
+  is discarded. Sync and opt-out take the same per-contributor advisory lock,
+  and a sync re-checks consent once it holds that lock, so an in-flight sync
+  can't write records back after an opt-out.
+
+**Who sees what:**
+- Every query that returns a pattern includes
+  `HAVING count(DISTINCT contributor) >= 5` (`MIN_PRACTICES`), so no code path
+  can return a pattern from fewer than 5 practices.
+- Pooled patterns are shown only to contributing practices (`poolInsights`).
+  Everyone always sees their own data.
+- Synthetic and live data are never mixed in a query.
+- The admin console shows pool health only: record counts per payer and per
+  code, with contributor counts and a below-threshold marker.
+
 ## Reference codes
 
 `src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
@@ -280,11 +349,14 @@ and need a license before production use.
 | EOB reading (Phase 2) | Local text extraction first; AWS Textract for scans at deployment | Patient data stays on ClaimHive's servers; Textract is covered by the AWS BAA |
 | Protected money | Shown, never billed | "Would it have been denied?" is hard to prove; only verified recovered cash is billed |
 | Results report | Live page + monthly PDF, no patient details | Easy to show and share the benefit |
+| Pool visibility (Phase 3) | Pooled insights only for contributing practices | Fair to those who share; a clear reason to opt in |
+| Pool history (Phase 3) | Last 12 months on opt-in, then ongoing | Patterns reach the 5-practice minimum quickly |
+| Opt-out (Phase 3) | Delete everything shared | The clearest promise to make at onboarding |
+| Pool storage (Phase 3) | Separate schema + role, random contributor token | Can't be joined with practice data; can move to its own database later |
 | AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
 
 ## Not yet built (by phase)
 
-3. De-identification and the pool (Safe Harbor pipeline,
-onboarding opt-in step). 4. Denial intelligence engine. 5. Pre-submission claim
+4. Denial intelligence engine. 5. Pre-submission claim
 check. 6. Appeal generator. 7. Recovery tracking and billing. 8. Pilot
 readiness (AWS under a BAA, KMS, the pilot checklist in the README).

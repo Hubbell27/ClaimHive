@@ -5,7 +5,7 @@ ClaimHive learns from pooled, de-identified denial data across practices,
 catches likely denials before a claim is submitted, drafts appeals for staff to
 review, and is paid on a contingency of money recovered.
 
-> **Development status:** Phase 2 (data ingestion and results). **Synthetic data
+> **Development status:** Phase 3 (de-identification and the shared pool). **Synthetic data
 > only.** No real patient data exists in, or may be loaded into, any development
 > or test environment.
 
@@ -26,6 +26,14 @@ review, and is paid on a contingency of money recovered.
 - Everything is merged into one claim model: payer, plan type, CDT codes, tooth/surface, attachments, billed, paid, denial codes (CARC/RARC), dates and appeal status
 - **Results page:** dollars recovered and protected, how each was won (with evidence), by insurer, and a monthly PDF with no patient details. Only recovered money through ClaimHive is billable; protected money is shown, never billed
 - **Sample files:** in development, the Imports page offers synthetic sample files to try every importer end to end
+
+## What Phase 3 adds
+
+- **A de-identified pool** (HIPAA Safe Harbor): only the payer, plan type, state, CDT codes, attachments, denial codes, outcome and days to payment are shared, with no names, IDs or dates; it lives in its own schema, reached by its own database role
+- **Consent at onboarding:** each practice owner decides once, before using the app, and can change the decision in Settings. Opting in shares the last 12 months plus new claims; opting out deletes everything shared
+- **5-practice minimum:** a pattern is shown only when at least 5 practices contributed to it
+- **Insurer patterns page:** denial rates by insurer and procedure, with the evidence behind each, for practices that share
+- **Admin pool health:** record counts per payer and per code
 
 ## Quick start (local, synthetic data)
 
@@ -53,8 +61,9 @@ To create a ClaimHive staff (platform admin) account:
 |---|---|---|
 | `MIGRATION_DATABASE_URL` | Owns the tables | `prisma migrate` only |
 | `DATABASE_URL` | `claimhive_app`: not the owner, not a superuser, no `BYPASSRLS` | the app and the worker |
+| `POOL_DATABASE_URL` | `claimhive_pool`: the `pool` schema only, with no access to practice data | pool sync, pool queries |
 
-The first migration creates `claimhive_app`. In AWS, give it a password or
+The migrations create `claimhive_app` and `claimhive_pool`. In AWS, give each a password or
 IAM authentication.
 
 ## Tests
@@ -77,7 +86,7 @@ SMOKE_EMAIL=owner@demo.claimhive.test SMOKE_PASSWORD='<temp password>' npm run s
 ```
 
 The smoke test signs in and enrolls MFA, so each demo login can be used for one
-smoke run. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
+smoke run. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
 confirm the mapping, clear the review queue and download the monthly PDF, with
 the worker running (`npm run worker`).
 

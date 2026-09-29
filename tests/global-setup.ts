@@ -16,7 +16,7 @@ export default async function setup() {
 
   const client = new pg.Client({ connectionString: url });
   await client.connect();
-  await client.query("DROP SCHEMA IF EXISTS public CASCADE; DROP SCHEMA IF EXISTS pgboss CASCADE; CREATE SCHEMA public;");
+  await client.query("DROP SCHEMA IF EXISTS public CASCADE; DROP SCHEMA IF EXISTS pgboss CASCADE; DROP SCHEMA IF EXISTS pool CASCADE; CREATE SCHEMA public;");
   await client.end();
   execSync("npx prisma migrate deploy", { env: { ...process.env, MIGRATION_DATABASE_URL: url }, stdio: "pipe" });
 }

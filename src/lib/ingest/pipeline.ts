@@ -15,6 +15,7 @@ import { keysFor } from "../practices";
 import { headerSignature, parseAging, readTable, suggestMapping, validateMapping, type AgingMapping } from "./aging";
 import { extractEob, minConfidence, pdfText, REVIEW_THRESHOLD, type EobExtraction } from "./eob";
 import { mergeClaims } from "./merge";
+import { enqueuePoolSync } from "../pool/sync";
 import type { NormalizedClaim, ParseProblem, ParseResult } from "./types";
 import { parse835, parse837, parseX12, X12Error } from "./x12";
 
@@ -184,6 +185,7 @@ export async function processBatch(practiceId: string, batchId: string): Promise
     await audit({ action: "import.process", actorUserId: batch.createdBy, practiceId, resourceType: "import_batch", resourceId: batchId,
       details: { kind: batch.kind, created: stats.created, updated: stats.updated, skipped: stats.skipped, review: !!review } });
     log.info({ event: "import.done", practiceId, jobId: batchId, count: stats.created + stats.updated, durationMs: Date.now() - started });
+    await enqueuePoolSync(practiceId);
   } catch (e) {
     const code = e instanceof X12Error || e instanceof ImportError ? "unreadable_file" : "processing_error";
     await withPractice(practiceId, (tx) => tx.importBatch.update({
@@ -220,6 +222,7 @@ export async function acceptReview(ctx: Actor, reviewId: string, corrected: Norm
   });
   await audit({ action: "phi.edit", actorUserId: ctx.userId, actorEmail: ctx.email, practiceId: ctx.practiceId,
     resourceType: "review_item", resourceId: reviewId, details: { outcome: "accepted" } });
+  await enqueuePoolSync(ctx.practiceId);
 }
 
 export async function dismissReview(ctx: Actor, reviewId: string): Promise<void> {

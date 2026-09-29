@@ -1,11 +1,17 @@
 import Link from "next/link";
 import { logoutAction } from "@/lib/actions/auth";
 import { can, requirePractice } from "@/lib/auth/rbac";
-import { withPractice } from "@/lib/db";
+import { prisma, withPractice } from "@/lib/db";
+import { redirect } from "next/navigation";
 
 export default async function PracticeLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requirePractice("dashboard.view");
   const owner = can(ctx.role, "members.manage");
+  // Owners decide about the pool once, before anything else (billers are never asked).
+  if (can(ctx.role, "pool.opt_in")) {
+    const p = await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId }, select: { poolDecidedAt: true } });
+    if (!p.poolDecidedAt) redirect("/onboarding/pool");
+  }
   const toReview = await withPractice(ctx.practiceId, (tx) => tx.reviewItem.count({ where: { status: "open" } }));
   return (
     <div className="min-h-screen">
@@ -18,6 +24,7 @@ export default async function PracticeLayout({ children }: { children: React.Rea
         <Link href="/app/review" className="font-medium">
           Review{toReview > 0 && <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-xs text-white">{toReview}</span>}
         </Link>
+        <Link href="/app/pool" className="font-medium">Insurer patterns</Link>
         <Link href="/app/patients" className="font-medium">Patients</Link>
         {owner && <Link href="/app/members" className="font-medium">Team</Link>}
         {owner && <Link href="/app/audit" className="font-medium">Audit log</Link>}

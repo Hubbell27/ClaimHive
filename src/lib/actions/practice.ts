@@ -5,6 +5,8 @@ import { requirePractice } from "../auth/rbac";
 import { hashPassword, temporaryPassword } from "../auth/password";
 import { revokeAllForUser } from "../auth/session";
 import { prisma } from "../db";
+import { decidePool } from "../pool/sync";
+import { redirect } from "next/navigation";
 import type { Role } from "@/generated/prisma/enums";
 
 export type InviteState = { error?: string; tempPassword?: string; email?: string } | undefined;
@@ -67,14 +69,11 @@ export async function resetMemberAction(form: FormData): Promise<void> {
   revalidatePath("/app/members");
 }
 
-export async function poolOptInAction(form: FormData) {
+/** The owner's pool decision, from onboarding or Settings. Opting out removes everything already shared. */
+export async function poolDecisionAction(form: FormData) {
   const ctx = await requirePractice("pool.opt_in");
-  const optIn = form.get("optIn") === "on";
-  await prisma().practice.update({
-    where: { id: ctx.practiceId },
-    data: { poolOptIn: optIn, poolOptInAt: optIn ? new Date() : null, poolOptInBy: optIn ? ctx.userId : null },
-  });
-  await audit({ action: "practice.pool_opt_in", actorUserId: ctx.userId, actorEmail: ctx.email, practiceId: ctx.practiceId,
-    details: { optIn } });
+  const share = form.get("share") === "yes";
+  await decidePool(ctx, share);
   revalidatePath("/app/settings");
+  redirect(String(form.get("next") ?? "") === "app" ? "/app" : "/app/settings?saved=1");
 }

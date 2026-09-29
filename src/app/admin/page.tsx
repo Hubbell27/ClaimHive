@@ -5,6 +5,8 @@ import { generateSyntheticAction } from "@/lib/actions/admin";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth/rbac";
 import { prisma } from "@/lib/db";
+import { isRealDeployment } from "@/lib/env";
+import { MIN_PRACTICES, poolHealth } from "@/lib/pool/store";
 
 /** ClaimHive staff console. Shows practice metadata only; no patient data is reachable from here. */
 export default async function AdminPage() {
@@ -13,6 +15,8 @@ export default async function AdminPage() {
     orderBy: { createdAt: "desc" }, take: 200,
     select: { id: true, name: true, state: true, poolOptIn: true, isSynthetic: true, createdAt: true, _count: { select: { memberships: true } } },
   });
+  // Pool health: counts only (no patterns), live and synthetic kept apart.
+  const health = await poolHealth(isRealDeployment() ? false : practices.some((p) => p.isSynthetic));
   await audit({ action: "admin.view", actorUserId: s.userId, actorEmail: s.user.email, details: { page: "practices" } });
   return (
     <div className="min-h-screen">
@@ -32,6 +36,34 @@ export default async function AdminPage() {
           <label><span className="label">Patients each</span><input name="patients" type="number" defaultValue={150} min={10} max={2000} className="field w-28" /></label>
           <button className="btn-secondary">Queue job</button>
         </form>
+        <section className="card space-y-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-bold">Pool health</h2>
+            <p className="text-sm text-stone-500">
+              {health.contributors} contributing practices · {health.claims.toLocaleString("en-US")} claims · {health.lines.toLocaleString("en-US")} procedures
+              {isRealDeployment() ? "" : " (synthetic pool)"}
+            </p>
+          </div>
+          <p className="text-xs text-stone-500">Rows below {MIN_PRACTICES} practices aren&apos;t shown to any practice yet.</p>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-stone-500"><th>Insurer</th><th className="text-right">Claims</th><th className="text-right">Practices</th><th className="text-right">Denied lines</th></tr></thead>
+              <tbody>{health.byPayer.map((r) => (
+                <tr key={r.payer} className={`border-t ${r.meetsThreshold ? "" : "text-stone-400"}`}>
+                  <td className="py-1">{r.payer}</td><td className="text-right">{r.claims}</td><td className="text-right">{r.practices}</td>
+                  <td className="text-right">{r.deniedLines} / {r.lines}</td>
+                </tr>))}</tbody>
+            </table>
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-stone-500"><th>Procedure</th><th className="text-right">Lines</th><th className="text-right">Practices</th><th className="text-right">Denied</th></tr></thead>
+              <tbody>{health.byCode.map((r) => (
+                <tr key={r.cdt} className={`border-t ${r.meetsThreshold ? "" : "text-stone-400"}`}>
+                  <td className="py-1 font-mono">{r.cdt}</td><td className="text-right">{r.lines}</td><td className="text-right">{r.practices}</td><td className="text-right">{r.denied}</td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+          {!health.claims && <p className="text-sm text-stone-500">No practice is sharing yet.</p>}
+        </section>
         <div className="card overflow-x-auto p-0">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-stone-500"><th className="p-3">Practice</th><th>State</th><th>Members</th><th>Pool</th><th>Data</th><th>Created</th></tr></thead>

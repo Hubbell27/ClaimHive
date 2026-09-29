@@ -30,6 +30,7 @@ async function main() {
   await page.waitForURL(/\/(choose-practice|app)$/);
   if (process.env.SMOKE_ADMIN) {
     const a = await page.goto(`${base}/admin`);
+    if (process.env.SMOKE_SHOTS) await page.screenshot({ path: `${process.env.SMOKE_SHOTS}/admin.png`, fullPage: true });
     console.log("admin console", a?.status(), (await page.locator("main").innerText()).replace(/\s+/g, " ").slice(0, 200));
     await page.goto(`${base}/app/patients`);
     console.log("admin -> /app/patients lands on", page.url());
@@ -40,7 +41,19 @@ async function main() {
   }
   if (page.url().endsWith("/choose-practice")) {
     await page.locator("form button").first().click();
+    await page.waitForURL(/\/(app|onboarding\/pool)$/);
+  }
+  await page.waitForLoadState("networkidle");
+  if (page.url().endsWith("/onboarding/pool")) {
+    console.log("onboarding →", (await page.locator("main").innerText()).replace(/\s+/g, " ").slice(0, 300));
+    if (process.env.SMOKE_SHOTS) await page.screenshot({ path: `${process.env.SMOKE_SHOTS}/onboarding.png`, fullPage: true });
+    await page.click(`button[value=${process.env.SMOKE_POOL === "no" ? "no" : "yes"}]`);
     await page.waitForURL("**/app");
+  }
+  if (process.env.SMOKE_POOL) {
+    await poolFlow(page);
+    await browser.close();
+    return;
   }
   if (process.env.SMOKE_IMPORTS) {
     await importFlow(page);
@@ -126,6 +139,28 @@ async function importFlow(page: import("playwright").Page) {
   if (shots) await page.screenshot({ path: `${shots}/imports.png`, fullPage: true });
   await page.goto(`${base}/app`);
   if (shots) await page.screenshot({ path: `${shots}/dashboard.png`, fullPage: true });
+}
+
+/** Phase 3: patterns for a contributor, the Settings summary, stopping sharing. */
+async function poolFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  for (let i = 0; i < 20; i++) { // the full sync runs in the worker
+    await page.goto(`${base}/app/settings`);
+    if (/Claims in the pool \d*[1-9]/.test(await text())) break;
+    await page.waitForTimeout(1000);
+  }
+  console.log("settings →", (await text()).slice(0, 260));
+  if (shots) await page.screenshot({ path: `${shots}/settings.png`, fullPage: true });
+  await page.goto(`${base}/app/pool`);
+  console.log("patterns →", (await text()).slice(0, 500));
+  if (shots) await page.screenshot({ path: `${shots}/patterns.png`, fullPage: true });
+  await page.goto(`${base}/app/settings`);
+  await page.click("button[value=no]");
+  await page.waitForURL(/settings\?saved=1/);
+  console.log("after stop →", (await text()).slice(0, 160));
+  await page.goto(`${base}/app/pool`);
+  console.log("patterns after stop →", (await text()).slice(0, 160));
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

@@ -33,19 +33,24 @@ export interface MergeStats {
 const DAY = 86_400_000;
 const toDate = (s: string | undefined) => (s ? new Date(`${s}T00:00:00Z`) : undefined);
 
-export async function resolvePayer(tx: TenantTx, name: string | undefined, payerId: string | undefined): Promise<string | undefined> {
+/**
+ * Finds or creates the insurer. `trusted` sources (835/837, which carry an X12 payer
+ * ID) mark it verified; names typed into a spreadsheet never do, so only verified
+ * names can appear in the shared pool.
+ */
+export async function resolvePayer(tx: TenantTx, name: string | undefined, payerId: string | undefined, trusted = false): Promise<string | undefined> {
   const cleanName = name?.replace(/\s+/g, " ").trim();
-  if (payerId) {
-    const byId = await tx.payer.findUnique({ where: { payerCode: payerId } });
-    if (byId) return byId.id;
-  }
-  if (cleanName) {
-    const byName = await tx.payer.findFirst({ where: { name: { equals: cleanName, mode: "insensitive" } } });
-    if (byName) return byName.id;
+  const verify = trusted && !!payerId;
+  const found = (payerId && (await tx.payer.findUnique({ where: { payerCode: payerId } })))
+    || (cleanName && (await tx.payer.findFirst({ where: { name: { equals: cleanName, mode: "insensitive" } } })))
+    || null;
+  if (found) {
+    if (verify && !found.verified) await tx.payer.update({ where: { id: found.id }, data: { verified: true } });
+    return found.id;
   }
   if (!cleanName && !payerId) return undefined;
   const code = payerId ?? `NAME:${cleanName!.toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 40)}`;
-  const created = await tx.payer.upsert({ where: { payerCode: code }, create: { name: titleCase(cleanName ?? code), payerCode: code }, update: {} });
+  const created = await tx.payer.upsert({ where: { payerCode: code }, create: { name: titleCase(cleanName ?? code), payerCode: code, verified: verify }, update: {} });
   return created.id;
 }
 
@@ -142,7 +147,7 @@ export async function mergeClaims(
   for (const c of claims) {
     if (c.isReversal) { stats.skipped++; stats.problems.push({ ref: c.ref, code: "reversal_skipped" }); continue; }
     if (!c.patient.lastName) { stats.skipped++; stats.problems.push({ ref: c.ref, code: "missing_patient" }); continue; }
-    const payerId = await resolvePayer(tx, c.payer.name, c.payer.payerId);
+    const payerId = await resolvePayer(tx, c.payer.name, c.payer.payerId, c.source === "era835" || c.source === "claim837");
     if (!payerId) { stats.skipped++; stats.problems.push({ ref: c.ref, code: "missing_carrier" }); continue; }
     const totals = claimTotals(c);
     stats.deniedCents += totals.denied;

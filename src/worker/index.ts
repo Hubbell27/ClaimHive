@@ -6,7 +6,8 @@ import "dotenv/config";
 import { audit } from "../lib/audit";
 import { prisma } from "../lib/db";
 import { processBatch, purgeOldFiles } from "../lib/ingest/pipeline";
-import { boss, QUEUES, type ImportJob, type SyntheticJob } from "../lib/jobs";
+import { boss, QUEUES, type ImportJob, type PoolSyncJob, type SyntheticJob } from "../lib/jobs";
+import { syncPractice } from "../lib/pool/sync";
 import { log } from "../lib/logger";
 import { loadSyntheticDataset } from "../lib/synthetic/load";
 
@@ -21,6 +22,9 @@ async function main() {
   });
   await b.work<ImportJob>(QUEUES.importProcess, { batchSize: 1 }, async ([job]) => {
     await processBatch(job.data.practiceId, job.data.batchId);
+  });
+  await b.work<PoolSyncJob>(QUEUES.poolSync, { batchSize: 1 }, async ([job]) => {
+    await syncPractice(job.data.practiceId, { full: job.data.full });
   });
   await b.work(QUEUES.purgeFiles, async () => {
     let n = 0;

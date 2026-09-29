@@ -104,6 +104,14 @@ model Practice {
   poolOptIn      Boolean      @default(false) @map("pool_opt_in")
   poolOptInAt    DateTime?    @map("pool_opt_in_at") @db.Timestamptz
   poolOptInBy    String?      @map("pool_opt_in_by") @db.Uuid
+  // The owner's recorded choice at onboarding (yes or no), and which consent text they saw.
+  poolDecidedAt  DateTime?    @map("pool_decided_at") @db.Timestamptz
+  poolConsentVersion String?  @map("pool_consent_version")
+  // Random contributor token used in the pool instead of the practice id. Rotated on opt-out.
+  poolToken      String?      @map("pool_token") @db.Uuid
+  poolSyncedAt   DateTime?    @map("pool_synced_at") @db.Timestamptz
+  poolShared     Int          @default(0) @map("pool_shared")   // claims currently in the pool
+  poolSkipped    Int          @default(0) @map("pool_skipped")  // claims held back (e.g. unrecognized insurer)
   isSynthetic    Boolean      @default(false) @map("is_synthetic")
   createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
   memberships    Membership[]
@@ -171,6 +179,9 @@ model Payer {
   name      String  @unique
   payerCode String  @unique @map("payer_code")
   isSynthetic Boolean @default(false) @map("is_synthetic")
+  // Only verified insurers (from an X12 payer ID, or curated) are named in the pool, so a
+  // mis-mapped spreadsheet column can never put a person's name into shared data.
+  verified  Boolean @default(false)
   claims    Claim[]
 
   @@map("payers")
@@ -219,7 +230,10 @@ model Claim {
   appealStatus    AppealStatus @default(none) @map("appeal_status")
   recoveredCents  Int          @default(0) @map("recovered_cents")
   isSynthetic     Boolean      @default(false) @map("is_synthetic")
+  // Random id of this claim's de-identified copy in the pool (only this tenant row links them).
+  poolRecordId    String?      @map("pool_record_id") @db.Uuid
   createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
   patient         Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
   payer           Payer        @relation(fields: [payerId], references: [id])
   lines           ClaimLine[]
@@ -228,6 +242,7 @@ model Claim {
   reviewItems     ReviewItem[]
 
   @@index([practiceId, claimKey])
+  @@index([practiceId, updatedAt])
   @@index([practiceId, status])
   @@index([practiceId, serviceDate])
   @@map("claims")

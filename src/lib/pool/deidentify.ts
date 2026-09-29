@@ -1,0 +1,149 @@
+/**
+ * De-identification for the shared pool (HIPAA Safe Harbor, 45 CFR 164.514(b)(2)).
+ *
+ * A pool record is BUILT from an allowlist; nothing is copied wholesale. It
+ * contains only the fields the owner agreed to share:
+ *   payer, plan type, region (state), CDT codes, attachments present,
+ *   denial codes (CARC/RARC), outcome, days to payment.
+ *
+ * How each of the 18 Safe Harbor identifiers is handled:
+ *   names, addresses, phone/fax, email, SSN, medical record / health plan
+ *   beneficiary / account numbers, certificate/license numbers, vehicle and
+ *   device ids, URLs, IP addresses, biometrics, photos → never read into the record.
+ *   Geography smaller than a state → only the practice's state is used.
+ *   Dates (service, birth, submission, payment) → dropped; only the whole-day
+ *   interval "days to payment" is kept, capped at 730.
+ *   Ages → not included.
+ *   Any other unique identifying number or code → the record id is random and the
+ *   contributor is a random token, neither derived from patient or practice data
+ *   (164.514(c)); claim numbers and ClaimHive ids never leave the practice.
+ *
+ * Extra defenses: an insurer is named only if verified (from an X12 payer ID, or
+ * curated), so a mis-mapped spreadsheet column can't put a person's name in the
+ * pool; `assertSafeHarbor` re-validates every record before it's written, and the
+ * pool tables enforce the same shapes with CHECK constraints.
+ */
+import { ATTACHMENTS, US_STATES } from "../reference/codes";
+
+export const POOL_CONSENT_VERSION = "2026-09-v1";
+
+export type PoolOutcome = "pending" | "paid" | "partially_paid" | "denied" | "appeal_won" | "appeal_lost";
+
+export interface PoolLine {
+  cdt: string;
+  denied: boolean;
+  carcs: string[]; // "CO-16"
+  rarcs: string[]; // "N706"
+}
+
+export interface PoolRecord {
+  id: string;
+  contributor: string;
+  payer: string;
+  planType: string;
+  region: string;
+  attachments: string[];
+  outcome: PoolOutcome;
+  daysToPayment: number | null;
+  isSynthetic: boolean;
+  lines: PoolLine[];
+}
+
+/** The claim fields de-identification is allowed to look at. */
+export interface ClaimForPool {
+  planType: string;
+  status: string;
+  appealStatus: string;
+  submittedAt: Date | null;
+  adjudicatedAt: Date | null;
+  paidCents: number;
+  attachments: string[];
+  isSynthetic: boolean;
+  payer: { name: string; verified: boolean };
+  lines: { id: string; cdtCode: string }[];
+  denials: { claimLineId: string | null; groupCode: string; carc: string; rarc: string | null }[];
+}
+
+export type SkipReason = "unverified_payer" | "no_procedures" | "draft";
+
+const DAY = 86_400_000;
+const PLAN_TYPES = new Set(["PPO", "DHMO", "INDEMNITY", "MEDICAID", "MEDICARE_ADVANTAGE", "UNKNOWN"]);
+const OUTCOMES = new Set<PoolOutcome>(["pending", "paid", "partially_paid", "denied", "appeal_won", "appeal_lost"]);
+const CDT = /^D\d{4}$/;
+const CARC = /^(CO|PR|OA|PI)-[A-Z0-9]{1,5}$/;
+const RARC = /^[A-Z]{1,2}\d{1,4}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Payer names: letters, digits, spaces and ordinary punctuation; no digits-only runs that could be ids.
+const PAYER = /^[A-Za-z][A-Za-z0-9 .,&'()/-]{1,79}$/;
+
+export function outcomeOf(c: Pick<ClaimForPool, "status" | "appealStatus">): PoolOutcome {
+  if (c.appealStatus === "won") return "appeal_won";
+  if (c.appealStatus === "lost") return "appeal_lost";
+  if (c.status === "paid" || c.status === "partially_paid" || c.status === "denied") return c.status;
+  return "pending";
+}
+
+export function toPoolRecord(
+  c: ClaimForPool,
+  ctx: { id: string; contributor: string; region: string },
+): { record: PoolRecord } | { skip: SkipReason } {
+  if (c.status === "draft") return { skip: "draft" };
+  if (!c.lines.length) return { skip: "no_procedures" };
+  if (!c.payer.verified || !PAYER.test(c.payer.name)) return { skip: "unverified_payer" };
+
+  const days = c.submittedAt && c.adjudicatedAt ? Math.round((c.adjudicatedAt.getTime() - c.submittedAt.getTime()) / DAY) : null;
+  const record: PoolRecord = {
+    id: ctx.id,
+    contributor: ctx.contributor,
+    payer: c.payer.name.replace(/\s+/g, " ").trim(),
+    planType: c.planType,
+    region: ctx.region,
+    attachments: [...new Set(c.attachments)].filter((a) => (ATTACHMENTS as readonly string[]).includes(a)).sort(),
+    outcome: outcomeOf(c),
+    daysToPayment: days !== null && days >= 0 && days <= 730 && c.paidCents > 0 ? days : null,
+    isSynthetic: c.isSynthetic,
+    lines: c.lines.map((l) => {
+      const d = c.denials.filter((x) => x.claimLineId === l.id);
+      return {
+        cdt: l.cdtCode,
+        denied: d.length > 0,
+        carcs: [...new Set(d.map((x) => `${x.groupCode}-${x.carc}`))].sort(),
+        rarcs: [...new Set(d.map((x) => x.rarc).filter((x): x is string => !!x))].sort(),
+      };
+    }),
+  };
+  // Claim-level denials (not tied to a line) apply to every line.
+  const claimLevel = c.denials.filter((x) => !x.claimLineId);
+  if (claimLevel.length) {
+    for (const l of record.lines) {
+      l.denied = true;
+      l.carcs = [...new Set([...l.carcs, ...claimLevel.map((x) => `${x.groupCode}-${x.carc}`)])].sort();
+      l.rarcs = [...new Set([...l.rarcs, ...claimLevel.map((x) => x.rarc).filter((x): x is string => !!x)])].sort();
+    }
+  }
+  assertSafeHarbor(record);
+  return { record };
+}
+
+export class DeidentificationError extends Error {}
+
+/** Re-validates a record's exact shape and every value. Throws on anything unexpected. */
+export function assertSafeHarbor(r: PoolRecord): void {
+  const fail = (why: string) => { throw new DeidentificationError(`pool record rejected: ${why}`); };
+  const keys = Object.keys(r).sort().join(",");
+  if (keys !== "attachments,contributor,daysToPayment,id,isSynthetic,lines,outcome,payer,planType,region") fail("unexpected fields");
+  if (!UUID.test(r.id) || !UUID.test(r.contributor)) fail("ids must be random UUIDs");
+  if (!PAYER.test(r.payer)) fail("payer");
+  if (!PLAN_TYPES.has(r.planType)) fail("plan type");
+  if (!US_STATES.includes(r.region)) fail("region must be a US state");
+  if (!r.attachments.every((a) => (ATTACHMENTS as readonly string[]).includes(a))) fail("attachments");
+  if (!OUTCOMES.has(r.outcome)) fail("outcome");
+  if (r.daysToPayment !== null && (!Number.isInteger(r.daysToPayment) || r.daysToPayment < 0 || r.daysToPayment > 730)) fail("days to payment");
+  if (typeof r.isSynthetic !== "boolean") fail("synthetic flag");
+  if (!r.lines.length) fail("no lines");
+  for (const l of r.lines) {
+    if (Object.keys(l).sort().join(",") !== "carcs,cdt,denied,rarcs") fail("unexpected line fields");
+    if (!CDT.test(l.cdt) || typeof l.denied !== "boolean") fail("line");
+    if (!l.carcs.every((x) => CARC.test(x)) || !l.rarcs.every((x) => RARC.test(x))) fail("denial codes");
+  }
+}
