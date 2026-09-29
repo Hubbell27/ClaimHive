@@ -51,6 +51,11 @@ async function main() {
     await page.click(`button[value=${process.env.SMOKE_POOL === "no" ? "no" : "yes"}]`);
     await page.waitForURL("**/app");
   }
+  if (process.env.SMOKE_APPEALS) {
+    await appealsFlow(page);
+    await browser.close();
+    return;
+  }
   if (process.env.SMOKE_PRECHECK) {
     await precheckFlow(page);
     await browser.close();
@@ -256,6 +261,47 @@ async function precheckFlow(page: import("playwright").Page) {
   await page.goto(`${base}/app/check`);
   console.log("hub →", (await text()).slice(0, 400));
   if (shots) await page.screenshot({ path: `${shots}/check-hub.png`, fullPage: true });
+}
+
+/** Phase 6: draft a letter from a denied claim, edit, approve, download, mark sent. */
+async function appealsFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  const settle = async () => { await page.waitForLoadState("load"); await page.waitForTimeout(1500); };
+  await page.goto(`${base}/app/claims?status=denied`);
+  const hit = page.locator("td a.bg-amber-50").first(); // a denied claim with a ClaimHive rule match
+  await (await hit.count() ? hit : page.locator("tbody a").first()).click();
+  await page.waitForURL(/\/app\/claims\/[0-9a-f-]{36}$/);
+  await settle();
+  if (!(await page.locator("input[name=enclosures]:checked").count())) await page.locator("input[name=enclosures]").first().check();
+  if (shots) await page.screenshot({ path: `${shots}/appeal-request.png`, fullPage: true });
+  await page.getByRole("button", { name: "Draft the letter" }).click();
+  await page.waitForURL(/\/app\/appeals\/[0-9a-f-]{36}$/);
+  for (let i = 0; i < 30 && !(await page.locator("textarea[name=body]").count()); i++) { await page.waitForTimeout(2000); await page.reload(); }
+  console.log("letter →", (await text()).slice(0, 900));
+  await page.fill("textarea[name=recipient]", "Appeals Department\nPO Box 1000\nSpringfield, IL 62701");
+  const body = page.locator("textarea[name=body]");
+  await body.fill((await body.inputValue()).replace("Sincerely,", "Thank you for your prompt review.\n\nSincerely,"));
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await settle();
+  if (shots) await page.screenshot({ path: `${shots}/appeal-draft.png`, fullPage: true });
+  await page.getByRole("button", { name: /Approve version/ }).click();
+  await settle();
+  await page.reload();
+  console.log("approved →", (await text()).slice(0, 300));
+  const pdf = await page.request.get(page.url().replace("/app/appeals/", "/api/appeals/") + "/pdf");
+  const bytes = await pdf.body();
+  console.log("pdf", pdf.status(), pdf.headers()["content-type"], bytes.length, "bytes");
+  if (shots) {
+    const fs = await import("node:fs");
+    fs.writeFileSync(`${shots}/appeal.pdf`, bytes);
+    await page.screenshot({ path: `${shots}/appeal-approved.png`, fullPage: true });
+  }
+  await page.getByRole("button", { name: "I've sent it to the insurer" }).click();
+  await settle();
+  await page.goto(`${base}/app/appeals`);
+  console.log("appeals →", (await text()).slice(0, 500));
+  if (shots) await page.screenshot({ path: `${shots}/appeals.png`, fullPage: false });
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

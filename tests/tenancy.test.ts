@@ -47,7 +47,9 @@ describe("tenant isolation (PostgreSQL row-level security)", () => {
   });
 
   it("identifiers are ciphertext in the database", async () => {
-    const rows = (await ownerQuery("select first_name_enc, last_name_enc, dob_enc from patients")).rows;
+    // This test's own patients only: other files' random ciphertext can contain short strings like "Ana" by chance.
+    const rows = (await ownerQuery("select first_name_enc, last_name_enc, dob_enc from patients where practice_id = any($1::uuid[])", [[a, b]])).rows;
+    expect(rows.length).toBeGreaterThan(0);
     for (const r of rows) {
       for (const v of Object.values(r) as Buffer[]) {
         expect(v.toString("latin1")).not.toMatch(/Alpha|Bravo|Ana|Ben|1980-01-01|1975-05-05/);

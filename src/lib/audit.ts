@@ -14,7 +14,8 @@ import { log } from "./logger";
 export type AuditAction =
   | "auth.login" | "auth.logout" | "auth.mfa" | "auth.mfa_enrolled" | "auth.password_change" | "auth.denied"
   | "phi.view" | "phi.list" | "phi.edit" | "phi.create" | "phi.export"
-  | "practice.create" | "practice.switch" | "practice.pool_opt_in" | "practice.pool_opt_out" | "practice.pool_consent_update" | "pool.view" | "claim.appeal_update" | "claim.precheck" | "claim.precheck_fix" | "member.invite" | "member.role_change"
+  | "practice.create" | "practice.switch" | "practice.pool_opt_in" | "practice.pool_opt_out" | "practice.pool_consent_update" | "pool.view" | "claim.appeal_update" | "claim.precheck" | "claim.precheck_fix"
+  | "appeal.request" | "appeal.draft" | "appeal.edit" | "appeal.approve" | "appeal.download" | "appeal.sent" | "practice.profile_update" | "member.invite" | "member.role_change"
   | "member.remove" | "admin.view" | "synthetic.generate" | "audit.view"
   | "import.upload" | "import.map" | "import.process" | "report.export";
 

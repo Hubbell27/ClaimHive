@@ -5,7 +5,7 @@ ClaimHive learns from pooled, de-identified denial data across practices,
 catches likely denials before a claim is submitted, drafts appeals for staff to
 review, and is paid on a contingency of money recovered.
 
-> **Development status:** Phase 5 (pre-submission claim check). **Synthetic data
+> **Development status:** Phase 6 (appeal letter generator). **Synthetic data
 > only.** No real patient data exists in, or may be loaded into, any development
 > or test environment.
 
@@ -51,6 +51,15 @@ review, and is paid on a contingency of money recovered.
 - **Basic checks for every practice:** missing tooth numbers or surfaces, duplicates, typical frequency limits, and the filing deadline
 - **Fixes are tracked two ways:** the biller ticks "I've attached the perio chart" (the risk is recalculated at once), or ClaimHive notices when the 837 that was actually sent carries the fix
 - **Protected money:** when a fixed claim is paid, the paid amount shows on Results as "protected" (shown, never billed)
+
+## What Phase 6 adds
+
+- **Draft an appeal letter from any denied claim:** tick what you're enclosing, pick the argument (ClaimHive pre-fills both from its finding), and add optional notes
+- **Only de-identified content goes to the Anthropic API:** the insurer, procedure codes, tooth numbers, fees and denial reasons. The writer uses placeholders such as `{{PATIENT_NAME}}`; patient and practice details are filled in on ClaimHive's servers afterwards. A final check stops the request if a name, date or ID number slipped in (for example in the notes)
+- **Without an API key** (and in tests), ClaimHive writes the letter from its own standard wording
+- **Human review is mandatory:** the biller edits the letter and approves an exact version. Any later edit needs a new approval. Only an approved letter can be downloaded as a PDF on the practice's letterhead or marked as sent. **ClaimHive never sends anything**
+- **Appeals page:** drafted / sent / won / lost, the amount recovered and the win rate. Wins come from 835 payments; recoveries after a ClaimHive letter are credited to ClaimHive
+- **Letterhead in Settings** (owners): address, phone, NPI, tax ID and signer
 
 ## Quick start (local, synthetic data)
 
@@ -103,7 +112,7 @@ SMOKE_EMAIL=owner@demo.claimhive.test SMOKE_PASSWORD='<temp password>' npm run s
 ```
 
 The smoke test signs in and enrolls MFA, so each demo login can be used for one
-smoke run (re-running `npm run seed:synthetic` resets them). Add `SMOKE_PRECHECK=1` (with `SMOKE_POOL=yes` on a fresh seed and the worker running) to check a claim by hand, tick the fix and check an 837D before sending. Add `SMOKE_INTEL=1` to check rules, rule matches on denied claims and recording an appeal. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
+smoke run (re-running `npm run seed:synthetic` resets them). Add `SMOKE_APPEALS=1` (worker running) to draft, edit, approve and download an appeal letter and mark it sent. Add `SMOKE_PRECHECK=1` (with `SMOKE_POOL=yes` on a fresh seed and the worker running) to check a claim by hand, tick the fix and check an 837D before sending. Add `SMOKE_INTEL=1` to check rules, rule matches on denied claims and recording an appeal. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
 confirm the mapping, clear the review queue and download the monthly PDF, with
 the worker running (`npm run worker`).
 
@@ -115,13 +124,16 @@ the worker running (`npm run worker`).
 | `KEY_PROVIDER` | `local` (development, uses `MASTER_KEY`) or `kms` (AWS KMS, arrives with the deployment phase) |
 | `MASTER_KEY` | Development only: base64 of 32 random bytes |
 | `LOG_LEVEL` | pino level (default `info`; tests are silent) |
+| `ANTHROPIC_API_KEY` | Optional. Turns on the AI letter writer; without it ClaimHive uses its standard letter |
+| `ANTHROPIC_MODEL` | Optional. Defaults to `claude-opus-5-5` |
+| `ANTHROPIC_BAA` | Production only: set to `signed` once the agreement with Anthropic is in place. Until then, real practices get the standard letter. In development, only synthetic practices use the API |
 
 ## Before a real pilot (tracked, not yet done)
 
 - [ ] AWS deployment under a signed HIPAA BAA; KMS key provider; RDS encryption and TLS enforced
 - [ ] ADA license for CDT code descriptors (the labels here are ClaimHive's own paraphrases)
 - [ ] Nonce-based Content-Security-Policy, replacing `'unsafe-inline'` scripts
-- [ ] Anthropic API use under an appropriate agreement, sending de-identified content only (Phase 6)
+- [ ] Anthropic API use under a signed BAA (and zero data retention if available) before setting `ANTHROPIC_BAA=signed`. The code already sends de-identified content only
 - [ ] Security review / penetration test; backup and restore drill; incident response runbook
 
 ## Documentation

@@ -21,6 +21,7 @@ const ATTACHMENT_LABEL: Record<Attachment, string> = {
 export const METHODS = {
   appeal_with_attachment: "Appeal with the missing attachment",
   appeal_with_argument: "Appeal with a written argument",
+  appeal_letter: "Appeal letter drafted by ClaimHive",
   attachment_added_before_sending: "Attachment added before sending",
   code_fixed_before_sending: "Coding fixed before sending",
   paid_after_denial: "Paid after your team resubmitted",
@@ -56,6 +57,8 @@ export function explain(method: Method, e: Evidence): string {
       return `Appealed${codes} with the ${att} ${payer} asked for${reason(e.carc, e.rarc)}.`;
     case "appeal_with_argument":
       return `Appealed the ${payer} denial${codes} with a written argument${reason(e.carc, e.rarc)}.`;
+    case "appeal_letter":
+      return `Appealed the ${payer} denial${codes} with a letter ClaimHive drafted${e.attachment ? ` and the ${att}` : ""}${reason(e.carc, e.rarc)}.`;
     case "attachment_added_before_sending":
       return `ClaimHive flagged the missing ${att}${codes} before the claim was sent. ${payer} usually denies it without one, and this time paid.`;
     case "code_fixed_before_sending":

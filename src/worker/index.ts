@@ -6,7 +6,8 @@ import "dotenv/config";
 import { audit } from "../lib/audit";
 import { prisma } from "../lib/db";
 import { processBatch, purgeOldFiles } from "../lib/ingest/pipeline";
-import { boss, QUEUES, type ImportJob, type IntelJob, type PoolSyncJob, type SyntheticJob } from "../lib/jobs";
+import { draftLetter } from "../lib/appeals/letters";
+import { boss, QUEUES, type AppealJob, type ImportJob, type IntelJob, type PoolSyncJob, type SyntheticJob } from "../lib/jobs";
 import { syncPractice } from "../lib/pool/sync";
 import { rebuildRules } from "../lib/intel/engine";
 import { log } from "../lib/logger";
@@ -29,6 +30,9 @@ async function main() {
     // Rebuild rules once things settle: one rebuild per 5 minutes however many syncs arrive.
     const p = await prisma().practice.findUnique({ where: { id: job.data.practiceId }, select: { isSynthetic: true } });
     await b.send(QUEUES.intelRebuild, { synthetic: !!p?.isSynthetic }, { singletonKey: `rules:${!!p?.isSynthetic}`, singletonSeconds: 300, startAfter: 60 });
+  });
+  await b.work<AppealJob>(QUEUES.appealDraft, { batchSize: 1 }, async ([job]) => {
+    await draftLetter(job.data.practiceId, job.data.letterId);
   });
   await b.work<IntelJob>(QUEUES.intelRebuild, { batchSize: 1 }, async ([job]) => {
     await rebuildRules(job.data?.synthetic ?? false);

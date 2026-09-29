@@ -116,6 +116,18 @@ model Practice {
   poolSkipped    Int          @default(0) @map("pool_skipped")  // claims held back (e.g. unrecognized insurer)
   isSynthetic    Boolean      @default(false) @map("is_synthetic")
   createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  // Letterhead for appeal letters (Phase 6): business details, merged locally, never sent to the AI.
+  letterName     String?      @map("letter_name") // name as it should appear on letters (defaults to `name`)
+  addressLine1   String?      @map("address_line1")
+  addressLine2   String?      @map("address_line2")
+  city           String?
+  zip            String?      @db.VarChar(10)
+  phone          String?      @db.VarChar(20)
+  fax            String?      @db.VarChar(20)
+  npi            String?      @db.VarChar(10) // billing (type 2) NPI
+  taxId          String?      @map("tax_id") @db.VarChar(10)
+  signerName     String?      @map("signer_name")
+  signerTitle    String?      @map("signer_title")
   memberships    Membership[]
 
   @@map("practices")
@@ -237,6 +249,8 @@ model Claim {
   appealSentAt    DateTime?    @map("appeal_sent_at") @db.Date
   // The ClaimHive rule whose suggested fix the office used for this appeal (tenant-only; for attribution).
   appealRuleKey   String?      @map("appeal_rule_key")
+  // The ClaimHive-drafted letter that was sent for this appeal (Phase 6; attribution).
+  appealLetterId  String?      @map("appeal_letter_id") @db.Uuid
   // Pre-submission check (Phase 5): the latest score, kept on the claim for lists.
   precheckedAt    DateTime?    @map("prechecked_at") @db.Timestamptz
   riskScore       Float?       @map("risk_score")      // chance at least one line is denied (0..1)
@@ -253,6 +267,7 @@ model Claim {
   results         ResultEvent[]
   reviewItems     ReviewItem[]
   findings        CheckFinding[]
+  letters         AppealLetter[]
 
   @@index([practiceId, claimKey])
   @@index([practiceId, updatedAt])
@@ -436,4 +451,51 @@ model CheckFinding {
   @@index([practiceId, claimId])
   @@index([practiceId, status])
   @@map("check_findings")
+}
+
+// ---------------------------------------------------------------- appeal letters (PHI, encrypted; RLS)
+
+enum LetterStatus {
+  generating // queued for the writer
+  draft // written; the biller reviews and edits
+  approved // the biller approved this exact version (required before PDF / sending)
+  failed // the writer couldn't produce a letter (see error_code)
+  superseded // replaced by a newer letter for the same claim
+}
+
+// One appeal letter. The writer (Anthropic API or ClaimHive's template) only ever sees
+// de-identified content and returns text with {{PLACEHOLDERS}}; patient and practice
+// details are merged in here, locally, and the result is stored encrypted.
+model AppealLetter {
+  id              String       @id @default(uuid()) @db.Uuid
+  practiceId      String       @map("practice_id") @db.Uuid
+  claimId         String       @map("claim_id") @db.Uuid
+  status          LetterStatus @default(generating)
+  writer          String? // "ai" | "template"
+  model           String? // the model that wrote it (AI letters)
+  enclosures      String[]     @default([]) // attachments sent with the appeal
+  argument        String? // appeal argument kind (same values as claims.appeal_argument)
+  ruleKey         String?      @map("rule_key") // the ClaimHive rule the letter used
+  // Biller's extra points for the writer: checked for identifiers before anything is sent.
+  notesEnc        Bytes?       @map("notes_enc")
+  // The writer's de-identified text, with placeholders (kept to show what was sent/returned).
+  templateEnc     Bytes?       @map("template_enc")
+  // The merged letter the biller edits and approves.
+  bodyEnc         Bytes?       @map("body_enc")
+  recipient       String? // the insurer's appeals address (business address, not PHI)
+  version         Int          @default(0)
+  approvedVersion Int?         @map("approved_version")
+  approvedHash    String?      @map("approved_hash") // SHA-256 of the approved text
+  approvedBy      String?      @map("approved_by") @db.Uuid
+  approvedAt      DateTime?    @map("approved_at") @db.Timestamptz
+  sentAt          DateTime?    @map("sent_at") @db.Timestamptz
+  errorCode       String?      @map("error_code")
+  createdBy       String       @map("created_by") @db.Uuid
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  claim           Claim        @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId, claimId])
+  @@index([practiceId, status])
+  @@map("appeal_letters")
 }

@@ -18,6 +18,7 @@
     "smoke": "tsx scripts/dev/smoke.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0",
     "@faker-js/faker": "^10.6.0",
     "@node-rs/argon2": "^2.2.1",
     "@prisma/adapter-pg": "^7.10.0",

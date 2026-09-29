@@ -1,4 +1,5 @@
 import { PoolExplainer } from "@/components/PoolExplainer";
+import { ProfileForm } from "@/components/ProfileForm";
 import { poolDecisionAction } from "@/lib/actions/practice";
 import { requirePractice } from "@/lib/auth/rbac";
 import { prisma } from "@/lib/db";
@@ -36,6 +37,10 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           {p.poolDecidedAt && <span className="text-xs text-stone-500">Last decided {p.poolDecidedAt.toLocaleDateString("en-US")} (consent {p.poolConsentVersion})</span>}
         </form>
       </section>
+      <ProfileForm practiceName={p.name} state={p.state} profile={{
+        letterName: p.letterName ?? "", addressLine1: p.addressLine1 ?? "", addressLine2: p.addressLine2 ?? "", city: p.city ?? "", zip: p.zip ?? "",
+        phone: p.phone ?? "", fax: p.fax ?? "", npi: p.npi ?? "", taxId: p.taxId ?? "", signerName: p.signerName ?? "", signerTitle: p.signerTitle ?? "",
+      }} />
     </div>
   );
 }

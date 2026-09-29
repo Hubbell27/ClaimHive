@@ -438,6 +438,36 @@ as `protected` (`attachment_added_before_sending` / `code_fixed_before_sending`,
 attributed, never billed). Draft results pages are re-scored on every view,
 because rules are rebuilt as the pool grows.
 
+## Appeal letter generator (Phase 6)
+
+`src/lib/appeals/`. The flow is: request → job (`appeal.draft`) → draft → biller edits → approve → PDF / mark sent.
+
+**What a writer sees** (`deidentify.ts`, `buildAppealRequest`) is built from an allowlist: the insurer name (verified insurers only, otherwise "the insurer"), plan type, procedure codes and descriptions, tooth and surfaces, fees and denied amounts, CARC/RARC reasons, the enclosures, the argument, ClaimHive's pooled finding for the rule (numbers only), and the biller's optional notes. There are no names, dates, member IDs, claim numbers, addresses or practice details. The writer is told to use placeholders (`placeholders.ts`) wherever a letter needs them.
+
+**Checked before sending:** `assertNoIdentifiers` runs on the serialized request, right before any writer is called. It looks for date, phone, email, SSN, URL and long-number patterns, and for this letter's own identifiers: the patient's name, member ID, claim number, date of birth, the service and denial dates, and the practice's name, NPI, tax ID, phone and address. If anything matches, the letter fails with `identifier_in_request` and nothing is sent. The error records only the kind of identifier, never the value.
+
+**Writers** (`writers.ts`):
+- `anthropicWriter` uses the Anthropic API (`claude-opus-5-5`, medium effort) with server-side refusal fallback (`fallbacks: "default"`). The system prompt is static so it can be cached. Refusal, `max_tokens` and API errors become a failed letter with a plain-English reason, and the biller can retry or switch to the standard letter.
+- `templateWriter` is ClaimHive's own wording. It's used when there's no key, in tests, and for any practice whose data may not go to the API yet. `aiAllowed` permits the API for synthetic practices in development, and for real practices only in production with `ANTHROPIC_BAA=signed`.
+
+A returned letter that uses a placeholder ClaimHive doesn't know fails as `unknown_placeholder`.
+
+**Merged locally, stored encrypted:** placeholders are filled from the decrypted claim and the practice profile. Anything ClaimHive doesn't have becomes `[add member ID]` and the like, which blocks approval until the biller fills it in. The writer's text (`template_enc`), the merged letter (`body_enc`) and the notes (`notes_enc`) are AES-GCM encrypted under the practice key.
+
+**Human review:**
+- Every save is a new `version` and clears any approval.
+- `approveLetter` requires: a complete letterhead, no `[add …]` or `{{…}}` left in the text, an insurer address, and the same version the biller had open. It stores who approved, when, and a SHA-256 of the approved address, text and enclosures.
+- A database CHECK makes an approved letter's `approved_version` equal its current `version`.
+- The PDF route serves approved letters only. The file name carries no patient details.
+
+**Sending is the biller's job.** "I've sent it" copies the enclosures, argument and rule onto the claim (the same appeal fields Phase 4 learns from) and sets `appeal_letter_id`. When an 835 later shows the payment, the recovery is credited as `appeal_letter` (attributed to ClaimHive).
+
+**Other data rules:**
+- There is one live letter per claim; a new request supersedes unsent ones.
+- The app role has no DELETE on `appeal_letters`.
+- RLS applies as on every tenant table.
+- Audit actions: `appeal.request`, `appeal.draft` (writer, model, request size), `appeal.edit` (version), `appeal.approve` (version, hash), `appeal.download` and `appeal.sent`.
+
 ## Reference codes
 
 `src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
@@ -469,9 +499,14 @@ and need a license before production use.
 | Pre-send entry (Phase 5) | Quick form and an 837D upload before sending | The form suits one claim; the 837 checks a whole day's batch |
 | Non-sharers (Phase 5) | Basic checks only | Pooled rules stay a reason to share; everyone still gets real value |
 | Fix tracking (Phase 5) | The biller's tick plus auto-detection from the sent 837 | Instant feedback, and fixes made in the practice's own software still count |
+| AI in development (Phase 6) | Real API when a key is set (synthetic practices only); standard letter otherwise | The whole flow works and is testable without a key; no real data can reach the API before the BAA |
+| Letter output (Phase 6) | PDF on the practice's letterhead | Ready to print, fax or upload to a portal |
+| Letterhead (Phase 6) | Practice profile in Settings | Entered once by the owner and merged locally, never sent to the AI |
+| Approval (Phase 6) | Any biller or owner, of an exact version | Whoever edits approves; the audit log records who approved which version |
+| Attribution (Phase 6) | Recoveries after a ClaimHive letter count as ClaimHive's | The letter is ClaimHive's work; this can be revisited when billing is set up in Phase 7 |
 | AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
 
 ## Not yet built (by phase)
 
-6. Appeal generator. 7. Recovery tracking and billing. 8. Pilot
+7. Recovery tracking and billing. 8. Pilot
 readiness (AWS under a BAA, KMS, the pilot checklist in the README).

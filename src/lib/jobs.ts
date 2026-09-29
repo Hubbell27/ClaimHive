@@ -10,6 +10,7 @@ export const QUEUES = {
   purgeFiles: "import.purge_files", // daily: drop stored originals past retention
   poolSync: "pool.sync", // share a practice's new/changed claims with the de-identified pool
   intelRebuild: "intel.rebuild", // recompute denial rules from the pool (after syncs, and nightly)
+  appealDraft: "appeal.draft", // write an appeal letter (de-identified request; merged locally)
 } as const;
 
 const g = globalThis as unknown as { boss?: Promise<PgBoss> };
@@ -29,5 +30,6 @@ export function boss(): Promise<PgBoss> {
 
 export interface IntelJob { synthetic: boolean }
 export interface PoolSyncJob { practiceId: string; full: boolean }
+export interface AppealJob { practiceId: string; letterId: string }
 export interface ImportJob { practiceId: string; batchId: string }
 export interface SyntheticJob { practices: number; patientsPerPractice: number; seed: number; requestedBy: string }

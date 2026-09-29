@@ -226,11 +226,12 @@ export async function mergeClaims(
         const first = existing.denials[0];
         const payer = await tx.payer.findUnique({ where: { id: existing.payerId }, select: { name: true } });
         // Attributed to ClaimHive when the office appealed with the fix a ClaimHive rule suggested.
-        const viaClaimHive = isClaimHiveAttributed({ flaggedFixApplied: !!existing.appealRuleKey });
+        // ...or sent an appeal letter ClaimHive drafted (Phase 6).
+        const viaClaimHive = isClaimHiveAttributed({ flaggedFixApplied: !!existing.appealRuleKey, claimHiveAppeal: !!existing.appealLetterId });
         results.push({
           practiceId: tx.practiceId, claimId: existing.id, kind: "recovered", amountCents: increase,
           attributed: viaClaimHive,
-          method: !viaClaimHive ? "paid_after_denial" : existing.appealAttachments.length ? "appeal_with_attachment" : "appeal_with_argument",
+          method: !viaClaimHive ? "paid_after_denial" : existing.appealLetterId ? "appeal_letter" : existing.appealAttachments.length ? "appeal_with_attachment" : "appeal_with_argument",
           evidence: {
             payer: payer?.name, cdtCodes: [...new Set(existing.lines.filter((l) => existing.denials.some((d) => d.claimLineId === l.id)).map((l) => l.cdtCode))],
             carc: first.carc, rarc: first.rarc ?? undefined, deniedAt: first.deniedAt.toISOString().slice(0, 10), paidAt: c.adjudicatedAt,

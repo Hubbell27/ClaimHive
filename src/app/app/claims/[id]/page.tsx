@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppealForm } from "@/components/AppealForm";
+import { LetterRequestForm } from "@/components/LetterRequestForm";
+import { aiAllowed } from "@/lib/appeals/letters";
 import { RuleCard } from "@/components/RuleCard";
 import { audit } from "@/lib/audit";
-import { requirePractice } from "@/lib/auth/rbac";
+import { can, requirePractice } from "@/lib/auth/rbac";
 import { prisma, withPractice } from "@/lib/db";
 import { KIND_LABEL } from "@/lib/ingest/labels";
 import { matchClaims } from "@/lib/intel/match";
@@ -26,7 +28,9 @@ export default async function ClaimPage({ params }: { params: Promise<{ id: stri
   await audit({ action: "phi.view", actorUserId: ctx.userId, actorEmail: ctx.email, practiceId: ctx.practiceId, resourceType: "claim", resourceId: id });
   const name = `${keys.decrypt("patients", "last_name", c.patient.id, c.patient.lastNameEnc)}, ${keys.decrypt("patients", "first_name", c.patient.id, c.patient.firstNameEnc)}`;
   const matches = (await matchClaims(ctx.practiceId, [c])).get(c.id) ?? [];
-  const sharing = (await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId }, select: { poolOptIn: true } })).poolOptIn;
+  const practice = await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId }, select: { poolOptIn: true, isSynthetic: true } });
+  const sharing = practice.poolOptIn;
+  const letter = await withPractice(ctx.practiceId, (tx) => tx.appealLetter.findFirst({ where: { claimId: id, status: { not: "superseded" } }, orderBy: { createdAt: "desc" } }));
   const denied = c.denials.reduce((s, d) => s + d.amountCents, 0);
 
   return (
@@ -68,6 +72,17 @@ export default async function ClaimPage({ params }: { params: Promise<{ id: stri
             </p>
           )}
         </section>
+      )}
+      {denied > 0 && letter && (
+        <div className="card flex flex-wrap items-center justify-between gap-2">
+          <p><b>Appeal letter:</b> {letter.sentAt ? `sent ${letter.sentAt.toLocaleDateString("en-US")}` : { generating: "being written", draft: "draft, needs review", approved: "approved", failed: "couldn't be written", superseded: "" }[letter.status]}</p>
+          <Link href={`/app/appeals/${letter.id}`} className="btn-primary">Open the letter</Link>
+        </div>
+      )}
+      {denied > 0 && can(ctx.role, "phi.edit") && (!letter || (!letter.sentAt && letter.status !== "generating")) && (
+        <LetterRequestForm claimId={c.id} ai={aiAllowed(practice)}
+          defaultAttachment={matches.find((m) => m.rule.stats.condition.attachment)?.rule.stats.condition.attachment}
+          suggestions={matches.map((m) => ({ key: m.rule.key, title: m.text.title }))} />
       )}
       {denied > 0 && (
         // Keyed on updatedAt: after a save the form remounts with the saved values (React keeps a form's first defaults otherwise).
