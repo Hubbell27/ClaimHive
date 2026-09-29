@@ -1,0 +1,9 @@
+environment            = "production"
+region                 = "us-east-1"
+certificate_arn        = "arn:aws:acm:us-east-1:111111111111:certificate/REPLACE"
+image_tag              = "REPLACE_WITH_GIT_SHA"
+alert_email            = "ops@example.com"
+billing_issuer_address = "REPLACE: ClaimHive Inc. street, city, state ZIP"
+billing_issuer_email   = "billing@example.com"
+# anthropic_baa        = "signed"   # only after the Anthropic BAA is signed
+# enable_ai_letters    = true       # after putting a value in the ANTHROPIC_API_KEY secret

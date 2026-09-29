@@ -44,3 +44,25 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
+
+  infra:
+    # The Terraform is validated here; it is applied by hand from docs/DEPLOYMENT.md.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  image:
+    # Builds the deployable image (not pushed).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t claimhive:ci .

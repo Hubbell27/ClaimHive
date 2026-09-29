@@ -57,6 +57,11 @@ async function main() {
     await page.click(`button[value=${process.env.SMOKE_POOL === "no" ? "no" : "yes"}]`);
     await page.waitForURL("**/app");
   }
+  if (process.env.SMOKE_SETUP) {
+    await setupFlow(page);
+    await browser.close();
+    return;
+  }
   if (process.env.SMOKE_BILLING) {
     await practiceBillingFlow(page);
     await browser.close();
@@ -354,6 +359,25 @@ async function practiceBillingFlow(page: import("playwright").Page) {
   const pdf = await page.request.get(page.url().replace("/app/billing/", "/api/billing/statements/") + "?format=pdf");
   console.log("statement pdf", pdf.status(), (await pdf.body()).length, "bytes");
   if (shots) (await import("node:fs")).writeFileSync(`${shots}/statement.pdf`, await pdf.body());
+}
+
+/** Phase 8: the owner's setup checklist and the 12-month report (page + PDF). */
+async function setupFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  await page.goto(`${base}/app/setup`);
+  console.log("setup →", (await text()).slice(0, 700));
+  if (shots) await page.screenshot({ path: `${shots}/setup.png`, fullPage: true });
+  await page.goto(`${base}/app/report`);
+  console.log("report →", (await text()).slice(0, 700));
+  if (shots) await page.screenshot({ path: `${shots}/report.png`, fullPage: false });
+  const pdf = await page.request.get(`${base}/api/reports/opportunity`);
+  console.log("report pdf", pdf.status(), (await pdf.body()).length, "bytes");
+  if (shots) (await import("node:fs")).writeFileSync(`${shots}/report.pdf`, await pdf.body());
+  await page.goto(`${base}/app/setup`);
+  console.log("setup after →", (await text()).slice(0, 200));
+  const health = await page.request.get(`${base}/api/health`);
+  console.log("health", health.status(), await health.text());
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

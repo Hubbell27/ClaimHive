@@ -497,6 +497,29 @@ A returned letter that uses a placeholder ClaimHive doesn't know fails as `unkno
   - `quickbooksCsv`, all issued statements for one month, for staff, with synthetic practices excluded in real deployments.
 - Audit actions: `billing.rate_set`, `billing.draft_built`, `billing.statement_issued`, `billing.export` and `billing.view`.
 
+## Pilot readiness (Phase 8)
+
+**Keys in production** (`KmsKeyProvider`, `src/lib/crypto.ts`):
+- Each practice's DEK is wrapped by KMS `Encrypt` under the app key, with the encryption context `{app: "claimhive", purpose: "practice-dek"}`, and stored with a `K` marker byte.
+- The platform key (it seals staff TOTP seeds) is a KMS-generated data key, kept only in encrypted form (`PLATFORM_KEY_WRAPPED`).
+- The ECS task role may use the key only with `app=claimhive` in the encryption context, so KMS rejects a key presented for the wrong purpose.
+- Every unwrap is in CloudTrail. Unwrapped keys are cached in memory for 5 minutes.
+
+**Guided setup** (`src/lib/setup.ts`) derives each step from real state: `pool_decided_at`, letterhead gaps, member count, finished imports by kind, and `report_viewed_at`. Owners can skip only the optional steps (team, 837s).
+
+**12-month report** (`src/lib/reports/opportunity.ts`) covers unpaid denials (net of recoveries) from the last 365 days:
+- **Recoverable** means not appealed, not won or lost, and denied within `APPEAL_WINDOW_DAYS` (180).
+  - The chance of winning is the matched pooled rule's measured appeal win rate, or else a rough typical rate for the denial reason, labelled "typical".
+  - Expected value is denied × chance.
+- **Preventable** groups each claim under its matched pooled rule, or else a basic cause read from its CARC.
+  - The avoidable share for a pooled rule is 1 − base rate / rate without the fix.
+  - For basic causes it's a fixed, documented factor.
+- The PDF uses ClaimHive claim references only.
+
+**Deployment** (`infra/terraform`, `Dockerfile`, docs/DEPLOYMENT.md): one image runs the web, worker and migrate tasks. Secrets are created by Terraform but filled in by hand, so their values never enter state. `scripts/set-role-passwords.ts` gives `claimhive_app` and `claimhive_pool` their passwords after migrations. `/api/health` is the load balancer check.
+
+**Readiness** (`src/lib/readiness.ts`) runs automated checks against the live configuration and database (role ownership, forced RLS, audit triggers, synthetic data, rate, BAA flags) and lists the manual sign-offs.
+
 ## Reference codes
 
 `src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
@@ -537,9 +560,16 @@ and need a license before production use.
 | Statements (Phase 7) | Drafted on the 1st, staff review and issue, then locked | A person checks every invoice before a practice sees it |
 | Clawbacks (Phase 7) | Credit on the next statement at the original rate | Issued statements never change; the correction is visible and traceable |
 | Exports (Phase 7) | PDF + CSV per statement; QuickBooks Online import per month | For the practice's accountant and ClaimHive's books |
+| Onboarding (Phase 8) | Staff create the practice and invite the owner; guided setup checklist | A person vets every pilot practice; the checklist gets them to value fast |
+| 12-month report (Phase 8) | Still recoverable + preventable; page + PDF | Shows the money immediately and is shareable without patient details |
+| AWS (Phase 8) | Guide + Terraform, validated not applied | Reviewable infrastructure code; applying it is a deliberate, human step |
 | AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
 
-## Not yet built (by phase)
+## After the build phases
 
-8. Pilot
-readiness (AWS under a BAA, KMS, the pilot checklist in the README).
+All eight phases are built. Before real data: [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md).
+Known follow-ups:
+- nonce-based CSP;
+- AWS Textract for scanned EOBs;
+- EDI clearinghouse connections (today files are uploaded);
+- per-insurer appeal deadlines (the report uses 180 days).

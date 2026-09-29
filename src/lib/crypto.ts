@@ -10,6 +10,7 @@
  * ciphertext copied to another row or practice fails to decrypt.
  */
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
+import { DecryptCommand, EncryptCommand, KMSClient } from "@aws-sdk/client-kms";
 import { isRealDeployment } from "./env";
 
 const VERSION = 1;
@@ -39,6 +40,43 @@ export class LocalKeyProvider implements KeyProvider {
   }
 }
 
+/** The part of the KMS client ClaimHive uses (so tests can stand in for AWS). */
+export interface KmsLike {
+  send(cmd: EncryptCommand | DecryptCommand): Promise<{ CiphertextBlob?: Uint8Array; Plaintext?: Uint8Array }>;
+}
+
+const KMS_MARK = 0x4b; // "K": a DEK wrapped by AWS KMS (local wraps start with VERSION)
+
+/**
+ * Production: AWS KMS wraps each practice's DEK (the master key never leaves KMS).
+ * The encryption context binds every wrapped key to its purpose; KMS rejects a
+ * mismatch, and CloudTrail records every unwrap.
+ */
+export class KmsKeyProvider implements KeyProvider {
+  constructor(private readonly kms: KmsLike, private readonly keyId: string, private readonly platformWrappedB64: string) {}
+  async wrap(dek: Buffer) {
+    const r = await this.kms.send(new EncryptCommand({ KeyId: this.keyId, Plaintext: dek, EncryptionContext: { app: "claimhive", purpose: "practice-dek" } }));
+    if (!r.CiphertextBlob) throw new Error("KMS returned no ciphertext");
+    const out = new Uint8Array(1 + r.CiphertextBlob.length);
+    out[0] = KMS_MARK;
+    out.set(r.CiphertextBlob, 1);
+    return out;
+  }
+  async unwrap(wrapped: Uint8Array) {
+    if (wrapped[0] !== KMS_MARK) throw new Error("this key was not wrapped by KMS");
+    return this.decrypt(wrapped.subarray(1), "practice-dek");
+  }
+  async platformKey() {
+    const raw = await this.decrypt(Buffer.from(this.platformWrappedB64, "base64"), "platform-key");
+    return Buffer.from(hkdfSync("sha256", raw, "claimhive", "claimhive/platform", 32));
+  }
+  private async decrypt(blob: Uint8Array, purpose: string): Promise<Buffer> {
+    const r = await this.kms.send(new DecryptCommand({ KeyId: this.keyId, CiphertextBlob: blob, EncryptionContext: { app: "claimhive", purpose } }));
+    if (!r.Plaintext) throw new Error("KMS returned no plaintext");
+    return Buffer.from(r.Plaintext);
+  }
+}
+
 let provider: KeyProvider | null = null;
 
 export function keyProvider(): KeyProvider {
@@ -47,8 +85,11 @@ export function keyProvider(): KeyProvider {
   if (mode === "local") {
     if (isRealDeployment()) throw new Error("KEY_PROVIDER=local is not allowed in a real deployment");
     provider = new LocalKeyProvider(process.env.MASTER_KEY ?? "");
+  } else if (mode === "kms") {
+    const keyId = process.env.KMS_KEY_ID, platform = process.env.PLATFORM_KEY_WRAPPED;
+    if (!keyId || !platform) throw new Error("KEY_PROVIDER=kms needs KMS_KEY_ID and PLATFORM_KEY_WRAPPED");
+    provider = new KmsKeyProvider(new KMSClient({}), keyId, platform);
   } else {
-    // AWS KMS provider is added with the deployment work (Phase 8).
     throw new Error(`key provider "${mode}" not configured`);
   }
   return provider;

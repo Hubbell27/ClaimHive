@@ -5,7 +5,7 @@ ClaimHive learns from pooled, de-identified denial data across practices,
 catches likely denials before a claim is submitted, drafts appeals for staff to
 review, and is paid on a contingency of money recovered.
 
-> **Development status:** Phase 7 (recovery tracking and billing). **Synthetic data
+> **Development status:** Phase 8 (pilot readiness). All eight build phases are done; see [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md) before any real data. **Synthetic data
 > only.** No real patient data exists in, or may be loaded into, any development
 > or test environment.
 
@@ -69,6 +69,27 @@ review, and is paid on a contingency of money recovered.
 - **Clawbacks:** when a corrected 835 pays less than money ClaimHive recorded as recovered, the reversal is recorded, and the fee on it is credited on the next statement at the original rate
 - **Exports:** PDF invoice and CSV line items for each statement; a QuickBooks Online invoice import file for each month (staff). None contain patient details
 - **Ledger fixes:** a second partial payment on the same claim is now its own recovery (it used to be dropped), and Results shows money taken back
+
+## What Phase 8 adds
+
+- **Guided setup:** ClaimHive staff create the practice and invite the owner, who follows a checklist:
+  - secure the account;
+  - decide about sharing;
+  - add the letterhead;
+  - invite billers;
+  - import 12 months of aging, 835s and 837s;
+  - open the 12-month report.
+
+  Progress comes from what's actually been done.
+- **12-month "money left on the table" report** (page + PDF with no patient names):
+  - **Still recoverable:** denials inside a 180-day appeal window, ranked by expected value (denied dollars × chance an appeal wins), with the fix.
+  - **Preventable:** denials a check before sending would have avoided, grouped by cause. It uses pooled rules for practices that share, and denial codes for everyone.
+- **AWS deployment:**
+  - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) is the step-by-step guide;
+  - `infra/terraform` holds VPC, ECS Fargate, RDS, KMS, Secrets Manager, ALB + WAF, CloudWatch and CloudTrail (validated in CI, not yet applied);
+  - a `Dockerfile` builds the image (built in CI);
+  - the **AWS KMS key provider** (`KEY_PROVIDER=kms`) wraps each practice's key.
+- **Readiness:** `npm run readiness` / **Admin → Readiness** checks the deployment automatically (KMS, TLS, restricted role, RLS, audit log, no synthetic data, billing setup, AI BAA). [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md) lists everything a person must sign off
 
 ## Quick start (local, synthetic data)
 
@@ -134,19 +155,18 @@ the worker running (`npm run worker`).
 | `MASTER_KEY` | Development only: base64 of 32 random bytes |
 | `LOG_LEVEL` | pino level (default `info`; tests are silent) |
 | `BILLING_ISSUER_NAME`, `BILLING_ISSUER_ADDRESS`, `BILLING_ISSUER_EMAIL` | ClaimHive's details at the top of statements (default name: ClaimHive Inc.) |
+| `KMS_KEY_ID`, `PLATFORM_KEY_WRAPPED` | Production (`KEY_PROVIDER=kms`): the KMS app key and the KMS-encrypted platform key (`scripts/generate-platform-key.ts`) |
 | `ANTHROPIC_API_KEY` | Optional. Turns on the AI letter writer; without it ClaimHive uses its standard letter |
 | `ANTHROPIC_MODEL` | Optional. Defaults to `claude-opus-5-5` |
 | `ANTHROPIC_BAA` | Production only: set to `signed` once the agreement with Anthropic is in place. Until then, real practices get the standard letter. In development, only synthetic practices use the API |
 
-## Before a real pilot (tracked, not yet done)
+## Before a real pilot
 
-- [ ] AWS deployment under a signed HIPAA BAA; KMS key provider; RDS encryption and TLS enforced
-- [ ] ADA license for CDT code descriptors (the labels here are ClaimHive's own paraphrases)
-- [ ] Nonce-based Content-Security-Policy, replacing `'unsafe-inline'` scripts
-- [ ] Anthropic API use under a signed BAA (and zero data retention if available) before setting `ANTHROPIC_BAA=signed`. The code already sends de-identified content only
-- [ ] Real contingency terms in the admin console (the seed's 20% is a development default) and ClaimHive's billing details (`BILLING_ISSUER_*`)
-- [ ] Security review / penetration test; backup and restore drill; incident response runbook
+See [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md): automated readiness checks, agreements (AWS, practices, Anthropic), security review, restore drill and training. Nothing real goes in until every item is signed off.
 
 ## Documentation
+
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): deploying on AWS
+- [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md): before real patient data
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): system design, the security model and the reasoning behind the main decisions

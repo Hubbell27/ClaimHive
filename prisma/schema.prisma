@@ -129,6 +129,9 @@ model Practice {
   taxId          String?      @map("tax_id") @db.VarChar(10)
   signerName     String?      @map("signer_name")
   signerTitle    String?      @map("signer_title")
+  // Guided setup (Phase 8): optional steps the owner chose to skip, and when the 12-month report was first opened.
+  setupSkipped   String[]     @default([]) @map("setup_skipped")
+  reportViewedAt DateTime?    @map("report_viewed_at") @db.Timestamptz
   memberships    Membership[]
   billingRates   BillingRate[]
 

@@ -15,10 +15,12 @@
     "seed:synthetic": "tsx scripts/seed-synthetic.ts",
     "create-admin": "tsx scripts/create-admin.ts",
     "postinstall": "prisma generate",
-    "smoke": "tsx scripts/dev/smoke.ts"
+    "smoke": "tsx scripts/dev/smoke.ts",
+    "readiness": "tsx scripts/readiness.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
+    "@aws-sdk/client-kms": "^3.1142.0",
     "@faker-js/faker": "^10.6.0",
     "@node-rs/argon2": "^2.2.1",
     "@prisma/adapter-pg": "^7.10.0",

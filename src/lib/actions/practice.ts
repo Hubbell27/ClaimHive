@@ -85,3 +85,13 @@ export async function poolUpdateAction(form: FormData) {
   revalidatePath("/app/settings");
   redirect("/app");
 }
+
+/** Guided setup: the owner skips an optional step (e.g. no 837 files available). */
+export async function skipSetupStepAction(form: FormData) {
+  const ctx = await requirePractice("members.manage");
+  const key = String(form.get("step") ?? "");
+  if (!["team", "claim837"].includes(key)) return;
+  const p = await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId }, select: { setupSkipped: true } });
+  await prisma().practice.update({ where: { id: ctx.practiceId }, data: { setupSkipped: [...new Set([...p.setupSkipped, key])] } });
+  revalidatePath("/app/setup");
+}

@@ -4,6 +4,7 @@ import { can, requirePractice } from "@/lib/auth/rbac";
 import { prisma, withPractice } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { needsConsentUpdate } from "@/lib/pool/sync";
+import { setupSteps } from "@/lib/setup";
 
 export default async function PracticeLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requirePractice("dashboard.view");
@@ -15,12 +16,15 @@ export default async function PracticeLayout({ children }: { children: React.Rea
     if (!p.poolDecidedAt) redirect("/onboarding/pool");
     if (needsConsentUpdate(p)) redirect("/onboarding/pool-update");
   }
+  const setup = await setupSteps(ctx.practiceId);
   const toReview = await withPractice(ctx.practiceId, (tx) => tx.reviewItem.count({ where: { status: "open" } }));
   return (
     <div className="min-h-screen">
       <nav className="flex flex-wrap items-center gap-4 border-b bg-white px-5 py-3">
         <span className="font-bold text-brand">ClaimHive</span>
         <Link href="/app" className="font-medium">Money</Link>
+        {!setup.complete && <Link href="/app/setup" className="font-medium">Setup<span className="ml-1 rounded-full bg-brand px-1.5 text-xs text-white">{setup.left}</span></Link>}
+        <Link href="/app/report" className="font-medium">12-month report</Link>
         <Link href="/app/results" className="font-medium">Results</Link>
         <Link href="/app/billing" className="font-medium">Billing</Link>
         <Link href="/app/check" className="font-medium">Check a claim</Link>
