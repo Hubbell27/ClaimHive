@@ -3,7 +3,7 @@ ClaimHive Demo
 This installs a demo of ClaimHive on this PC, for trying it out and showing it to others.
 
 - Synthetic data only. Every practice, patient, claim and dollar in it is made up. Don't enter real patient information: this demo edition isn't set up for it.
-- Everything runs on this PC and is reachable only from this PC (http://localhost:3100). Nothing is sent anywhere. AI appeal letters use ClaimHive's standard wording.
+- Everything runs on this PC and is reachable only from this PC (http://127.0.0.1:3100). Nothing is sent anywhere. AI appeal letters use ClaimHive's standard wording.
 - The first start takes a few minutes while it builds the demo database. After that it starts in seconds.
 - You'll need an authenticator app on your phone (Microsoft Authenticator, Google Authenticator, 1Password...) for the two-step sign-in.
 

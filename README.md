@@ -98,7 +98,7 @@ review, and is paid on a contingency of money recovered.
 
 1. Download it: GitHub → Actions → CI → the latest green run → **Artifacts → ClaimHiveDemoSetup** (a zip containing the .exe). It isn't code-signed yet, so Windows SmartScreen may warn: choose **More info → Run anyway**.
 2. Run it. The first start builds a private database on the PC and loads the demo practices (a few minutes). Later starts take seconds.
-3. Your browser opens at http://localhost:3100, along with **Demo logins.txt**: owner, biller and ClaimHive staff sign-ins with one-time passwords. You'll set a new password and scan a code with an authenticator app.
+3. Your browser opens at http://127.0.0.1:3100, along with **Demo logins.txt**: owner, biller and ClaimHive staff sign-ins with one-time passwords. You'll set a new password and scan a code with an authenticator app.
 
 Start menu → **ClaimHive Demo** also has *Stop*, *Reset demo data* (start over) and *sign-in details*. Everything listens on 127.0.0.1 only. Data lives in `%LOCALAPPDATA%\ClaimHive Demo`, and uninstalling removes it. The launcher is `desktop/launcher.mjs`; `desktop/build_windows.ps1` builds the installer, and the `windows-demo` CI job installs it, signs in, restarts and uninstalls on every push.
 

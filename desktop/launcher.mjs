@@ -8,7 +8,7 @@
  *   node launcher.mjs status
  *
  * Synthetic data only. Everything runs on this PC and listens on 127.0.0.1 only:
- * a private PostgreSQL (port 55432), the web app (http://localhost:3100) and the
+ * a private PostgreSQL (port 55432), the web app (http://127.0.0.1:3100) and the
  * background worker. The demo's data and settings live in
  * %LOCALAPPDATA%\ClaimHive Demo (or CLAIMHIVE_DEMO_HOME).
  */
@@ -149,7 +149,7 @@ async function setup() {
     const staff = run(process.execPath, [TSX, "scripts/create-admin.ts", "staff@demo.claimhive.test", "Demo Staff"], { cwd: APP, env });
     const staffPw = /\(shown once\): (\S+)/.exec(staff)?.[1];
     if (!logins.length || !staffPw) throw new Error("the demo data loaded, but the sign-in details weren't found");
-    const url = `http://localhost:${state.webPort}`;
+    const url = `http://127.0.0.1:${state.webPort}`;
     fs.writeFileSync(LOGINS, [
       "ClaimHive Demo: sign-in details (synthetic data only)", "",
       `Open ${url}`, "",
@@ -182,8 +182,8 @@ async function start(openBrowser) {
   fs.mkdirSync(HOME, { recursive: true });
   const prev = readJson(RUN), st = readJson(STATE);
   if (prev && st && alive(prev.web) && await healthy(st.webPort)) {
-    say(`Already running at http://localhost:${st.webPort}`);
-    if (openBrowser) openUrl(`http://localhost:${st.webPort}`);
+    say(`Already running at http://127.0.0.1:${st.webPort}`);
+    if (openBrowser) openUrl(`http://127.0.0.1:${st.webPort}`);
     return;
   }
   const state = await setup();
@@ -194,7 +194,7 @@ async function start(openBrowser) {
   const worker = spawn(process.execPath, [TSX, "src/worker/index.ts"], { ...opts, stdio: ["ignore", log("worker"), log("worker")] });
   writeJson(RUN, { web: web.pid, worker: worker.pid, launcher: process.pid, startedAt: new Date().toISOString() });
 
-  const url = `http://localhost:${state.webPort}`;
+  const url = `http://127.0.0.1:${state.webPort}`;
   say("Starting…");
   for (let i = 0; i < 120 && !(await healthy(state.webPort)); i++) {
     if (web.exitCode !== null) throw new Error(`the web app stopped (see ${path.join(LOGS, "web.log")})`);
@@ -229,7 +229,7 @@ async function main() {
     case "stop": return stop();
     case "reset": stop(); fs.rmSync(HOME, { recursive: true, force: true }); return say("Demo data deleted. The next start builds a fresh demo.");
     case "logins": return fs.existsSync(LOGINS) ? openUrl(LOGINS) : say("Start ClaimHive Demo once first; the sign-in details are created then.");
-    case "status": { const st = readJson(STATE); const ok = st ? await healthy(st.webPort) : false; say(ok ? `Running at http://localhost:${st.webPort}` : "Not running."); return process.exit(ok ? 0 : 1); }
+    case "status": { const st = readJson(STATE); const ok = st ? await healthy(st.webPort) : false; say(ok ? `Running at http://127.0.0.1:${st.webPort}` : "Not running."); return process.exit(ok ? 0 : 1); }
     default: say(`Unknown command "${cmd}". Use start, stop, reset, logins or status.`); process.exit(2);
   }
 }
