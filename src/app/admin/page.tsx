@@ -7,6 +7,8 @@ import { requireAdmin } from "@/lib/auth/rbac";
 import { prisma } from "@/lib/db";
 import { isRealDeployment } from "@/lib/env";
 import { MIN_PRACTICES, poolHealth } from "@/lib/pool/store";
+import { listRules } from "@/lib/intel/engine";
+import { rebuildRulesAction } from "@/lib/actions/admin";
 
 /** ClaimHive staff console. Shows practice metadata only; no patient data is reachable from here. */
 export default async function AdminPage() {
@@ -16,7 +18,9 @@ export default async function AdminPage() {
     select: { id: true, name: true, state: true, poolOptIn: true, isSynthetic: true, createdAt: true, _count: { select: { memberships: true } } },
   });
   // Pool health: counts only (no patterns), live and synthetic kept apart.
-  const health = await poolHealth(isRealDeployment() ? false : practices.some((p) => p.isSynthetic));
+  const syntheticPool = isRealDeployment() ? false : practices.some((p) => p.isSynthetic);
+  const health = await poolHealth(syntheticPool);
+  const rules = await listRules({ synthetic: syntheticPool });
   await audit({ action: "admin.view", actorUserId: s.userId, actorEmail: s.user.email, details: { page: "practices" } });
   return (
     <div className="min-h-screen">
@@ -45,6 +49,10 @@ export default async function AdminPage() {
             </p>
           </div>
           <p className="text-xs text-stone-500">Rows below {MIN_PRACTICES} practices aren&apos;t shown to any practice yet.</p>
+          <form action={rebuildRulesAction} className="flex flex-wrap items-center gap-3 text-sm">
+            <span><b>{rules.length}</b> denial rules{rules[0] ? `, computed ${rules[0].computedAt.toLocaleString("en-US")}` : ""}</span>
+            <button type="submit" className="btn-secondary">Rebuild rules now</button>
+          </form>
           <div className="grid gap-4 lg:grid-cols-2">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-stone-500"><th>Insurer</th><th className="text-right">Claims</th><th className="text-right">Practices</th><th className="text-right">Denied lines</th></tr></thead>

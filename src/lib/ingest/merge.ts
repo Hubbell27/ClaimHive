@@ -16,7 +16,7 @@
  */
 import type { PracticeKeys } from "../crypto";
 import type { TenantTx } from "../db";
-import { recordResults, isClaimHiveAttributed, type ResultInput } from "../results/ledger";
+import { isAttachment, recordResults, isClaimHiveAttributed, type ResultInput } from "../results/ledger";
 import type { Attachment } from "../reference/codes";
 import { claimTotals, type NormalizedClaim, type ParseProblem, type SourceKind } from "./types";
 
@@ -217,12 +217,16 @@ export async function mergeClaims(
         data.recoveredCents = existing.recoveredCents + increase;
         const first = existing.denials[0];
         const payer = await tx.payer.findUnique({ where: { id: existing.payerId }, select: { name: true } });
+        // Attributed to ClaimHive when the office appealed with the fix a ClaimHive rule suggested.
+        const viaClaimHive = isClaimHiveAttributed({ flaggedFixApplied: !!existing.appealRuleKey });
         results.push({
           practiceId: tx.practiceId, claimId: existing.id, kind: "recovered", amountCents: increase,
-          attributed: isClaimHiveAttributed({}), method: "paid_after_denial",
+          attributed: viaClaimHive,
+          method: !viaClaimHive ? "paid_after_denial" : existing.appealAttachments.length ? "appeal_with_attachment" : "appeal_with_argument",
           evidence: {
             payer: payer?.name, cdtCodes: [...new Set(existing.lines.filter((l) => existing.denials.some((d) => d.claimLineId === l.id)).map((l) => l.cdtCode))],
             carc: first.carc, rarc: first.rarc ?? undefined, deniedAt: first.deniedAt.toISOString().slice(0, 10), paidAt: c.adjudicatedAt,
+            attachment: existing.appealAttachments.find(isAttachment), ruleId: existing.appealRuleKey ?? undefined,
           },
           occurredAt: newAt ?? opts.now ?? new Date(), sourceBatchId: opts.batchId, isSynthetic: opts.isSynthetic,
         });

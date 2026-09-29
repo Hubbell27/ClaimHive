@@ -1,4 +1,5 @@
 "use server";
+import { isRealDeployment } from "../env";
 import { revalidatePath } from "next/cache";
 import { audit } from "../audit";
 import { requireAdmin } from "../auth/rbac";
@@ -43,5 +44,14 @@ export async function generateSyntheticAction(form: FormData) {
   });
   await audit({ action: "synthetic.generate", actorUserId: s.userId, actorEmail: s.user.email,
     details: { queued: true, practices, patientsPerPractice } });
+  revalidatePath("/admin");
+}
+
+/** Recompute denial rules now (normally after syncs and nightly). */
+export async function rebuildRulesAction() {
+  const s = await requireAdmin();
+  const synthetic = !isRealDeployment();
+  await (await boss()).send(QUEUES.intelRebuild, { synthetic });
+  await audit({ action: "admin.view", actorUserId: s.userId, actorEmail: s.user.email, details: { action: "rules_rebuild", synthetic } });
   revalidatePath("/admin");
 }

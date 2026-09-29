@@ -30,6 +30,7 @@ function claimsForPool(): { input: ClaimForPool; phi: string[] }[] {
     input: {
       planType: c.planType, status: c.status, appealStatus: c.appealStatus, submittedAt: c.submittedAt, adjudicatedAt: c.adjudicatedAt,
       paidCents: c.lines.reduce((s, l) => s + l.paidCents, 0), attachments: c.attachments, isSynthetic: true,
+      appealAttachments: [] as string[], appealArgument: null,
       payer: { name: "Summit Dental Mutual", verified: true },
       lines: c.lines.map((l, i) => ({ id: `L${i}`, cdtCode: l.cdtCode })),
       denials: c.denials.map((d) => ({ claimLineId: `L${d.lineIndex}`, groupCode: d.groupCode, carc: d.carc, rarc: d.rarc ?? null })),
@@ -46,7 +47,7 @@ describe("de-identification (Safe Harbor)", () => {
       const json = JSON.stringify(out.record);
       for (const v of phi) expect(json).not.toContain(v);
       expect(json).not.toMatch(/\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}/); // no dates of any kind
-      expect(Object.keys(out.record).sort()).toEqual(["attachments", "contributor", "daysToPayment", "id", "isSynthetic", "lines", "outcome", "payer", "planType", "region"]);
+      expect(Object.keys(out.record).sort()).toEqual(["appealArgument", "appealAttachments", "attachments", "contributor", "daysToPayment", "extended", "id", "isSynthetic", "lines", "outcome", "payer", "planType", "region"]);
     }
   });
 
@@ -69,7 +70,8 @@ describe("de-identification (Safe Harbor)", () => {
     const good = out.record;
     const bad: Partial<PoolRecord & Record<string, unknown>>[] = [
       { patientName: "Jane Smith" }, { region: "Austin" }, { payer: "12345678" }, { id: "claim-1" },
-      { daysToPayment: 5000 }, { lines: [{ cdt: "D1110", denied: true, carcs: ["16 lacks info"], rarcs: [] }] },
+      { daysToPayment: 5000 }, { lines: [{ cdt: "D1110", denied: true, carcs: ["16 lacks info"], rarcs: [], freqBucket: null }] },
+      { appealArgument: "because" as never }, { lines: [{ cdt: "D1110", denied: false, carcs: [], rarcs: [], freqBucket: 7 as never }] },
     ];
     for (const b of bad) expect(() => assertSafeHarbor({ ...good, ...b } as PoolRecord)).toThrow(DeidentificationError);
     expect(() => assertSafeHarbor(good)).not.toThrow();
@@ -199,7 +201,8 @@ describe("sharing with the pool", () => {
   });
 
   it("the audit log records each decision", async () => {
-    const rows = (await ownerQuery("select action from audit_events where action like 'practice.pool_%'")).rows.map((r) => r.action);
+    const rows = (await ownerQuery("select action from audit_events where action like 'practice.pool_%' and practice_id = any($1::uuid[])",
+      [practices.map((p) => p.id)])).rows.map((r) => r.action);
     expect(rows.filter((a) => a === "practice.pool_opt_in")).toHaveLength(5);
     expect(rows).toContain("practice.pool_opt_out");
   });

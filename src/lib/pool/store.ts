@@ -48,22 +48,27 @@ export async function writeRecords(records: PoolRecord[], removeIds: string[] = 
     if (ids.length) await client.query("DELETE FROM pool.claims WHERE id = ANY($1::uuid[])", [ids]);
     if (records.length) {
       await client.query(
-        `INSERT INTO pool.claims (id, contributor, payer, plan_type, region, attachments, outcome, days_to_payment, is_synthetic)
-         SELECT id, contributor, payer, plan_type, region, coalesce(string_to_array(nullif(atts, ''), ','), '{}'), outcome, days, syn
-           FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::int[], $9::bool[])
-             AS t(id, contributor, payer, plan_type, region, atts, outcome, days, syn)`,
+        `INSERT INTO pool.claims (id, contributor, payer, plan_type, region, attachments, outcome, days_to_payment, is_synthetic,
+                                  appeal_attachments, appeal_argument, extended)
+         SELECT id, contributor, payer, plan_type, region, coalesce(string_to_array(nullif(atts, ''), ','), '{}'), outcome, days, syn,
+                coalesce(string_to_array(nullif(appeal_atts, ''), ','), '{}'), appeal_arg, ext
+           FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::int[], $9::bool[],
+                       $10::text[], $11::text[], $12::bool[])
+             AS t(id, contributor, payer, plan_type, region, atts, outcome, days, syn, appeal_atts, appeal_arg, ext)`,
         [
           records.map((r) => r.id), records.map((r) => r.contributor), records.map((r) => r.payer), records.map((r) => r.planType),
           records.map((r) => r.region), records.map((r) => r.attachments.join(",")), records.map((r) => r.outcome),
           records.map((r) => r.daysToPayment), records.map((r) => r.isSynthetic),
+          records.map((r) => r.appealAttachments.join(",")), records.map((r) => r.appealArgument), records.map((r) => r.extended),
         ],
       );
       const lines = records.flatMap((r) => r.lines.map((l) => ({ id: r.id, ...l })));
       await client.query(
-        `INSERT INTO pool.claim_lines (claim_id, cdt, denied, carcs, rarcs)
-         SELECT claim_id, cdt, denied, coalesce(string_to_array(nullif(carcs, ''), ','), '{}'), coalesce(string_to_array(nullif(rarcs, ''), ','), '{}')
-         FROM unnest($1::uuid[], $2::text[], $3::bool[], $4::text[], $5::text[]) AS t(claim_id, cdt, denied, carcs, rarcs)`,
-        [lines.map((l) => l.id), lines.map((l) => l.cdt), lines.map((l) => l.denied), lines.map((l) => l.carcs.join(",")), lines.map((l) => l.rarcs.join(","))],
+        `INSERT INTO pool.claim_lines (claim_id, cdt, denied, carcs, rarcs, freq_bucket)
+         SELECT claim_id, cdt, denied, coalesce(string_to_array(nullif(carcs, ''), ','), '{}'), coalesce(string_to_array(nullif(rarcs, ''), ','), '{}'), freq
+         FROM unnest($1::uuid[], $2::text[], $3::bool[], $4::text[], $5::text[], $6::smallint[]) AS t(claim_id, cdt, denied, carcs, rarcs, freq)`,
+        [lines.map((l) => l.id), lines.map((l) => l.cdt), lines.map((l) => l.denied), lines.map((l) => l.carcs.join(",")), lines.map((l) => l.rarcs.join(",")),
+          lines.map((l) => l.freqBucket)],
       );
     }
     await client.query("COMMIT");

@@ -1,6 +1,6 @@
 # ClaimHive architecture
 
-This document describes what exists (Phases 1–3) and the reasoning behind it.
+This document describes what exists (Phases 1–4) and the reasoning behind it.
 It is updated at the end of every phase.
 
 ## System overview
@@ -37,6 +37,7 @@ Source layout:
 | `src/lib/money.ts` | Dollar figures shown on the dashboard |
 | `src/lib/ingest/*` | Importers (aging, 835, 837D, EOB PDF), merge, pipeline |
 | `src/lib/results/*` | Results ledger, reporting periods, monthly PDF |
+| `src/lib/intel/*` | Denial intelligence: statistics, rule engine, plain-English explanations, matching rules to claims |
 | `src/lib/pool/*` | De-identification, the pool store (own role), sync/opt-in/opt-out, contributor-only insights |
 | `src/lib/synthetic/*` | Synthetic data generator and loader |
 | `src/lib/actions/*` | Server actions (auth, practice, admin, imports) |
@@ -333,6 +334,70 @@ capped at 730; no date of any kind is kept.
 - The admin console shows pool health only: record counts per payer and per
   code, with contributor counts and a below-threshold marker.
 
+## Denial intelligence engine (Phase 4)
+
+Transparent statistics only, with no black-box models (`src/lib/intel/`).
+
+**Statistics** (`stats.ts`):
+- Rates come with Wilson score 95% intervals.
+- Differences between two rates use Newcombe's hybrid score interval.
+- Both are tested against published reference values.
+
+**Kinds of rule**, evaluated per insurer × procedure, and per insurer ×
+plan type × procedure:
+- `missing_attachment`: denied more often when an X-ray, narrative, perio
+  chart or photo is missing.
+- `billed_with`: bundling. Denied more often when billed with a particular
+  other procedure.
+- `frequency`: the 2nd time in 12 months compared with the 1st, and the 3rd or
+  later compared with earlier ones.
+- `usually_denied`: denied most of the time regardless. Shown only where no
+  more specific rule explains it.
+
+**The strict bar** (owner's decision): both sides of a comparison need ≥30
+procedures from ≥5 practices, and the gap must be ≥15 points at the *lower end
+of its 95% interval*. A plan-type rule replaces the insurer-wide one when it's
+at least 15 points sharper, so a DHMO-only policy is reported as a DHMO rule.
+On synthetic data the engine rediscovers the planted rules and finds no false
+ones (tested). Planted rules with too little data stay below the bar, as they
+should.
+
+**Which fixes win:** for each rule, the engine compares denied procedures that
+were appealed with the fix (the missing attachment, a coding argument, a
+frequency exception) against those appealed without it.
+- It uses only records from practices that share appeal details (consent v2)
+  and that recorded what the appeal included, so "not recorded" never counts
+  as "no fix".
+- Each side is shown only with ≥10 appeals from ≥5 practices.
+
+**Storage and refresh:**
+- Rules are stored in `pool.rules` (aggregates only).
+- They're rebuilt after pool syncs (debounced to once per 5 minutes) and
+  nightly, and an admin can trigger a rebuild.
+
+**Explanations** (`explain.ts`): every rule states the finding, the evidence
+(rate, 95% range, n, practices), the usual denial codes, what to do before
+sending, and what wins on appeal. For example: "Summit Dental Mutual denies
+D4341 87% of the time without a periodontal chart, vs 3% with one."
+
+**On a practice's own claims** (`match.ts`):
+- Denied claims that fit a rule show the likely cause and the winning fix, on
+  the Claims list and the claim page. This is for contributing practices only,
+  like all pooled insight.
+- The claim page records what each appeal included (attachments and argument),
+  and whether the office used ClaimHive's suggested fix. That feeds the pool
+  (v2) and **attribution**: when a claim appealed with a ClaimHive-suggested
+  fix is later paid, the recovery is credited to ClaimHive
+  (`isClaimHiveAttributed`). Otherwise it's "recovered by your team".
+
+**Consent v2:**
+- It adds what an appeal included, plus a per-procedure frequency bucket
+  (1 / 2 / 3+ in 12 months, computed inside the practice; no dates are
+  shared).
+- Practices that agreed to the original terms are asked once. Until they
+  accept, their records carry none of the new fields (`extended = false`,
+  validated in `assertSafeHarbor`).
+
 ## Reference codes
 
 `src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
@@ -358,10 +423,13 @@ and need a license before production use.
 | Pool history (Phase 3) | Last 12 months on opt-in, then ongoing | Patterns reach the 5-practice minimum quickly |
 | Opt-out (Phase 3) | Delete everything shared | The clearest promise to make at onboarding |
 | Pool storage (Phase 3) | Separate schema + role, random contributor token | Can't be joined with practice data; can move to its own database later |
+| Rule bar (Phase 4) | Strict: ≥30 from ≥5 practices per side, gap ≥15 points at the lower 95% bound | Fewer, solid rules; false alarms cost trust |
+| Appeal-fix data (Phase 4) | New shared fields, re-ask consent | Real evidence for what wins; consent stays explicit |
+| Frequency (Phase 4) | Share a 1/2/3+ bucket only | Detects frequency limits without sharing dates |
 | AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
 
 ## Not yet built (by phase)
 
-4. Denial intelligence engine. 5. Pre-submission claim
+5. Pre-submission claim
 check. 6. Appeal generator. 7. Recovery tracking and billing. 8. Pilot
 readiness (AWS under a BAA, KMS, the pilot checklist in the README).

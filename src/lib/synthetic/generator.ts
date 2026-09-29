@@ -77,14 +77,14 @@ const VISITS: { weight: number; lines: string[][]; attach?: Partial<Record<Attac
   { weight: 40, lines: [["D0120"], ["D1110"], ["D0274"]] },
   { weight: 8, lines: [["D0150"], ["D0210"], ["D1110"]] },
   { weight: 12, lines: [["D2391", "D2392", "D2140"]], attach: { xray: 0.3 } },
-  { weight: 9, lines: [["D2740", "D2750"], ["D2950"]], attach: { xray: 0.72, photo: 0.2 } },
+  { weight: 9, lines: [["D2740", "D2750"], ["D2950"]], attach: { xray: 0.55, photo: 0.2 } },
   { weight: 7, lines: [["D4341"], ["D4341"]], attach: { perio_chart: 0.6, xray: 0.5 } },
   { weight: 6, lines: [["D4910"]], attach: { perio_chart: 0.4 } },
-  { weight: 4, lines: [["D3330", "D3310"]], attach: { xray: 0.7 } },
-  { weight: 5, lines: [["D7140", "D7210"]], attach: { xray: 0.5, narrative: 0.55 } },
+  { weight: 5, lines: [["D3330", "D3310"]], attach: { xray: 0.55 } },
+  { weight: 6, lines: [["D7140", "D7210"]], attach: { xray: 0.5, narrative: 0.5 } },
   { weight: 2, lines: [["D7240"], ["D9230"]], attach: { xray: 0.8, narrative: 0.6 } },
   { weight: 4, lines: [["D0140"], ["D9110"], ["D0220"]] },
-  { weight: 2, lines: [["D6010"]], attach: { xray: 0.8, narrative: 0.5 } },
+  { weight: 3, lines: [["D6010"]], attach: { xray: 0.8, narrative: 0.5 } },
   { weight: 1, lines: [["D5110"]] },
 ];
 
@@ -103,9 +103,12 @@ export interface GenClaim {
   denials: GenDenial[];
   appealStatus: "none" | "sent" | "won" | "lost";
   recoveredCents: number;
-  /** Won appeals: the hidden rule behind the denial, and whether the appeal supplied the fix. */
+  /** Appealed claims: the hidden rule behind the denial, and whether the appeal supplied the fix. */
   appealRuleId?: string;
   appealWithFix?: boolean;
+  /** What the appeal included (Phase 4 data): attachments added and the kind of argument. */
+  appealAttachments?: Attachment[];
+  appealArgument?: "documentation" | "medical_necessity" | "coding_correction" | "frequency_exception" | "coverage_dispute" | "other";
   /** Demo of a pre-submission catch: a rule that would have fired, fixed before sending (Phase 5 does this for real). */
   protectedRuleId?: string;
 }
@@ -226,16 +229,25 @@ export function generateDataset(opts: GenerateOptions = {}): GenPractice[] {
         let recovered = 0;
         let appealRuleId: string | undefined;
         let appealWithFix: boolean | undefined;
+        let appealAttachments: Attachment[] | undefined;
+        let appealArgument: GenClaim["appealArgument"];
         if (denials.length && rand() < 0.4) {
           const rule = HIDDEN_RULES.find((r) => r.id === denials[0].ruleId);
           const withFix = rand() < 0.6;
           const winRate = rule ? (withFix ? rule.appealWinWithFix : rule.appealWinWithoutFix) : 0.35;
           const decided = adjudicatedAt.getTime() + 60 * DAY < end;
+          appealRuleId = rule?.id;
+          appealWithFix = rule ? withFix : undefined;
+          // The "fix" for each kind of rule, as a biller would record it.
+          appealAttachments = rule?.when === "missing_attachment" && withFix ? [rule.attachment!] : [];
+          appealArgument = !rule ? "documentation"
+            : rule.when === "missing_attachment" ? (withFix ? "documentation" : "medical_necessity")
+            : rule.when === "billed_with" ? (withFix ? "coding_correction" : "medical_necessity")
+            : rule.when === "frequency" ? (withFix ? "frequency_exception" : "medical_necessity")
+            : "coverage_dispute";
           if (!decided) appealStatus = "sent";
           else if (rand() < winRate) {
             appealStatus = "won";
-            appealRuleId = rule?.id;
-            appealWithFix = rule ? withFix : undefined;
             recovered = denials.reduce((s, dn) => s + Math.round(dn.amountCents * ratio), 0);
           } else appealStatus = "lost";
         }
@@ -248,6 +260,7 @@ export function generateDataset(opts: GenerateOptions = {}): GenPractice[] {
         patient.claims.push({
           payerCode: payer.payerCode, planType, claimNumber: `${opts.claimPrefix ?? "SYN"}-${claimSeq++}`, serviceDate, submittedAt, adjudicatedAt,
           status, attachments, lines, denials, appealStatus, recoveredCents: recovered, appealRuleId, appealWithFix, protectedRuleId,
+          appealAttachments, appealArgument,
         });
       }
       practice.patients.push(patient);

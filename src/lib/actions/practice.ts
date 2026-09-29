@@ -5,7 +5,7 @@ import { requirePractice } from "../auth/rbac";
 import { hashPassword, temporaryPassword } from "../auth/password";
 import { revokeAllForUser } from "../auth/session";
 import { prisma } from "../db";
-import { decidePool } from "../pool/sync";
+import { answerConsentUpdate, decidePool } from "../pool/sync";
 import { redirect } from "next/navigation";
 import type { Role } from "@/generated/prisma/enums";
 
@@ -76,4 +76,12 @@ export async function poolDecisionAction(form: FormData) {
   await decidePool(ctx, share);
   revalidatePath("/app/settings");
   redirect(String(form.get("next") ?? "") === "app" ? "/app" : "/app/settings?saved=1");
+}
+
+/** The owner's answer to updated sharing terms (asked once). */
+export async function poolUpdateAction(form: FormData) {
+  const ctx = await requirePractice("pool.opt_in");
+  await answerConsentUpdate(ctx, form.get("accept") === "yes");
+  revalidatePath("/app/settings");
+  redirect("/app");
 }

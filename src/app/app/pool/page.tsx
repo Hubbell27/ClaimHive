@@ -4,6 +4,9 @@ import { can, requirePractice } from "@/lib/auth/rbac";
 import { poolInsights, type InsightFilter } from "@/lib/pool/insights";
 import type { PatternSort } from "@/lib/pool/store";
 import { CDT, CDT_BY_CODE } from "@/lib/reference/codes";
+import { RuleCard } from "@/components/RuleCard";
+import { listRules } from "@/lib/intel/engine";
+import { prisma } from "@/lib/db";
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const PLAN_LABEL: Record<string, string> = { PPO: "PPO", DHMO: "DHMO", INDEMNITY: "Indemnity", MEDICAID: "Medicaid", MEDICARE_ADVANTAGE: "Medicare Advantage", UNKNOWN: "Unknown" };
@@ -59,6 +62,13 @@ export default async function PoolPage({ searchParams }: { searchParams: Promise
   const categories = [...new Set(o.cdts.map((c) => CDT_BY_CODE.get(c)?.category).filter(Boolean) as string[])];
   const active = !!(f.payer || f.code || f.planType || f.mine || (f.minLines ?? 1) > 1);
   const rows = insights.denialRates;
+  const synthetic = (await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId }, select: { isSynthetic: true } })).isSynthetic;
+  const rules = await listRules({
+    synthetic,
+    payers: f.payer ? [f.payer] : f.mine ? o.myPayers : undefined,
+    cdts: f.cdt ? [f.cdt] : f.category ? CDT.filter((c) => c.category === f.category).map((c) => c.code) : undefined,
+    planType: f.planType,
+  });
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Insurer patterns</h1>
@@ -111,6 +121,21 @@ export default async function PoolPage({ searchParams }: { searchParams: Promise
         </div>
       </form>
 
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-xl font-bold">Rules ClaimHive found ({rules.length})</h2>
+          <p className="text-sm text-stone-600">
+            A pattern becomes a rule only when both sides of the comparison have at least 30 procedures from 5+ practices, and the
+            difference is at least 15 points even at the cautious end of its 95% range.
+          </p>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {rules.map((r) => <RuleCard key={r.key} rule={r} mine={o.myPayers.includes(r.payer)} />)}
+        </div>
+        {!rules.length && <p className="card text-sm text-stone-500">No rule meets the bar{active ? " for these filters" : " yet"}. Rules appear as more practices share.</p>}
+      </section>
+
+      <h2 className="pt-2 text-xl font-bold">All patterns</h2>
       <p className="text-sm text-stone-500">{rows.length} pattern{rows.length === 1 ? "" : "s"}{rows.length === 200 ? " (showing the first 200)" : ""}</p>
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">

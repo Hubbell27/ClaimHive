@@ -107,6 +107,8 @@ model Practice {
   // The owner's recorded choice at onboarding (yes or no), and which consent text they saw.
   poolDecidedAt  DateTime?    @map("pool_decided_at") @db.Timestamptz
   poolConsentVersion String?  @map("pool_consent_version")
+  // The newest consent version the owner has been shown (so an update is asked about once).
+  poolConsentOffered String?  @map("pool_consent_offered")
   // Random contributor token used in the pool instead of the practice id. Rotated on opt-out.
   poolToken      String?      @map("pool_token") @db.Uuid
   poolSyncedAt   DateTime?    @map("pool_synced_at") @db.Timestamptz
@@ -229,6 +231,12 @@ model Claim {
   attachments     String[]     @default([])
   appealStatus    AppealStatus @default(none) @map("appeal_status")
   recoveredCents  Int          @default(0) @map("recovered_cents")
+  // What the appeal included (Phase 4): attachments added and the kind of argument made.
+  appealAttachments String[]   @default([]) @map("appeal_attachments")
+  appealArgument  String?      @map("appeal_argument")
+  appealSentAt    DateTime?    @map("appeal_sent_at") @db.Date
+  // The ClaimHive rule whose suggested fix the office used for this appeal (tenant-only; for attribution).
+  appealRuleKey   String?      @map("appeal_rule_key")
   isSynthetic     Boolean      @default(false) @map("is_synthetic")
   // Random id of this claim's de-identified copy in the pool (only this tenant row links them).
   poolRecordId    String?      @map("pool_record_id") @db.Uuid

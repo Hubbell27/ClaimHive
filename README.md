@@ -5,7 +5,7 @@ ClaimHive learns from pooled, de-identified denial data across practices,
 catches likely denials before a claim is submitted, drafts appeals for staff to
 review, and is paid on a contingency of money recovered.
 
-> **Development status:** Phase 3 (de-identification and the shared pool). **Synthetic data
+> **Development status:** Phase 4 (denial intelligence engine). **Synthetic data
 > only.** No real patient data exists in, or may be loaded into, any development
 > or test environment.
 
@@ -35,6 +35,14 @@ review, and is paid on a contingency of money recovered.
 - **Insurer patterns page:** denial rates by insurer and procedure, with the evidence behind each, for practices that share
 - **Admin pool health:** record counts per payer and per code
 
+## What Phase 4 adds
+
+- **Rules found in the pool, with evidence:** for example, "BlueHarbor Dental denies D2740 73% of the time without an X-ray (n=41, 11 practices), vs 0% with one." It covers missing attachments, bundling, frequency limits and "usually denied" procedures, with 95% ranges and sample sizes, using transparent statistics only
+- **A strict bar:** ≥30 procedures from ≥5 practices on each side, and a gap of ≥15 points even at the cautious end of the range
+- **Which appeal fixes win:** for example, "Appeals that sent the missing periodontal chart won 60% vs 14% without"
+- **On your own claims:** denied claims show the likely cause and the winning fix; the claim page records what each appeal included, and recoveries made with ClaimHive's suggested fix are credited to ClaimHive
+- **Consent update:** practices already sharing are asked once before appeal details and 1/2/3+ frequency buckets are shared
+
 ## Quick start (local, synthetic data)
 
 Requirements: Node 22+ and PostgreSQL 15+.
@@ -44,7 +52,7 @@ npm install                      # also runs `prisma generate`
 cp .env.example .env             # then set MASTER_KEY: openssl rand -base64 32
 createdb claimhive
 npm run db:migrate               # as the owner role (MIGRATION_DATABASE_URL)
-npm run seed:synthetic           # prints demo owner/biller temporary passwords once
+npm run seed:synthetic           # 12 fictional practices; prints demo logins once; builds rules
 npm run dev                      # http://localhost:3000
 npm run worker                   # background jobs (pg-boss), in a second terminal
 ```
@@ -86,7 +94,7 @@ SMOKE_EMAIL=owner@demo.claimhive.test SMOKE_PASSWORD='<temp password>' npm run s
 ```
 
 The smoke test signs in and enrolls MFA, so each demo login can be used for one
-smoke run. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
+smoke run. Add `SMOKE_INTEL=1` to check rules, rule matches on denied claims and recording an appeal. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
 confirm the mapping, clear the review queue and download the monthly PDF, with
 the worker running (`npm run worker`).
 

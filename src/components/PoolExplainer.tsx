@@ -16,6 +16,8 @@ export function PoolExplainer() {
         <li>the denial and remark codes</li>
         <li>the outcome (paid, denied, appeal won or lost)</li>
         <li>how many days the insurer took to pay</li>
+        <li>what an appeal included (attachments added, what it argued)</li>
+        <li>whether a procedure was the 1st, 2nd or 3rd+ time for that patient in 12 months (never the dates)</li>
       </ul>
       <p><b>Never shared:</b> names, dates of birth, member IDs, claim numbers, any dates, tooth numbers, addresses, or your practice&apos;s name.
         The pool doesn&apos;t even know which practice a claim came from, only a random code.</p>

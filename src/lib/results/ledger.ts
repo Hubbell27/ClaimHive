@@ -93,9 +93,9 @@ export async function recordResults(tx: TenantTx, rows: ResultInput[]): Promise<
 }
 
 /**
- * Attribution: did this money come through ClaimHive? Phase 2 can only see
- * payments arriving, so it's always false here. Phase 5 (pre-submission flags)
- * and Phase 6 (ClaimHive-drafted appeals) supply the links that make it true.
+ * Attribution: did this money come through ClaimHive? True when the office appealed
+ * using the fix a ClaimHive rule suggested (recorded on the claim, Phase 4), or
+ * (Phase 5/6) fixed a claim ClaimHive flagged before sending, or sent a ClaimHive-drafted appeal.
  */
 export function isClaimHiveAttributed(_link: { flaggedFixApplied?: boolean; claimHiveAppeal?: boolean }): boolean {
   return !!(_link.flaggedFixApplied || _link.claimHiveAppeal);

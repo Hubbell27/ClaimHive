@@ -30,7 +30,7 @@ describe("synthetic data generator", () => {
   });
 
   it("plants hidden rules strongly enough to be learnable", () => {
-    const data = generateDataset({ seed: 3, practices: 8, patientsPerPractice: 250, endDate: end });
+    const data = generateDataset({ seed: 3, practices: 8, patientsPerPractice: 400, endDate: end });
     const claims = data.flatMap((p) => p.patients.flatMap((pt) => pt.claims));
     const r1 = HIDDEN_RULES.find((r) => r.id === "R1")!;
     const target = claims.filter((c) => c.payerCode === "SYN01" && c.lines.some((l) => l.cdtCode === "D4341"));

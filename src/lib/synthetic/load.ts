@@ -95,6 +95,8 @@ export async function loadSyntheticDataset(opts: GenerateOptions = {}): Promise<
           serviceDate: c.serviceDate, submittedAt: c.submittedAt, adjudicatedAt: c.adjudicatedAt, status: c.status,
           billedCents: billed, paidCents: c.lines.reduce((s, l) => s + l.paidCents, 0), attachments: c.attachments,
           appealStatus: c.appealStatus, recoveredCents: c.recoveredCents, isSynthetic: true,
+          appealAttachments: c.appealAttachments ?? [], appealArgument: c.appealArgument ?? null,
+          appealSentAt: c.appealStatus === "none" ? null : new Date(c.adjudicatedAt.getTime() + 14 * DAY),
         });
         const lineIds = c.lines.map(() => randomUUID());
         c.lines.forEach((l, i) => lines.push({

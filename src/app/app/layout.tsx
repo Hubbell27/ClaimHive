@@ -3,14 +3,17 @@ import { logoutAction } from "@/lib/actions/auth";
 import { can, requirePractice } from "@/lib/auth/rbac";
 import { prisma, withPractice } from "@/lib/db";
 import { redirect } from "next/navigation";
+import { needsConsentUpdate } from "@/lib/pool/sync";
 
 export default async function PracticeLayout({ children }: { children: React.ReactNode }) {
   const ctx = await requirePractice("dashboard.view");
   const owner = can(ctx.role, "members.manage");
   // Owners decide about the pool once, before anything else (billers are never asked).
   if (can(ctx.role, "pool.opt_in")) {
-    const p = await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId }, select: { poolDecidedAt: true } });
+    const p = await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId },
+      select: { poolDecidedAt: true, poolOptIn: true, poolConsentVersion: true, poolConsentOffered: true } });
     if (!p.poolDecidedAt) redirect("/onboarding/pool");
+    if (needsConsentUpdate(p)) redirect("/onboarding/pool-update");
   }
   const toReview = await withPractice(ctx.practiceId, (tx) => tx.reviewItem.count({ where: { status: "open" } }));
   return (

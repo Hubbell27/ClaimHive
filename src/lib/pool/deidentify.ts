@@ -3,8 +3,12 @@
  *
  * A pool record is BUILT from an allowlist; nothing is copied wholesale. It
  * contains only the fields the owner agreed to share:
- *   payer, plan type, region (state), CDT codes, attachments present,
- *   denial codes (CARC/RARC), outcome, days to payment.
+ *   v1 (2026-09-v1): payer, plan type, region (state), CDT codes, attachments
+ *       present, denial codes (CARC/RARC), outcome, days to payment.
+ *   v2 (2026-09-v2) adds: what an appeal included (attachments added, kind of
+ *       argument) and, per procedure, how many times it was billed for the same
+ *       patient in the past 12 months as a bucket (1, 2, 3+), computed inside the
+ *       practice. A practice on v1 shares the v2 fields as empty.
  *
  * How each of the 18 Safe Harbor identifiers is handled:
  *   names, addresses, phone/fax, email, SSN, medical record / health plan
@@ -25,7 +29,11 @@
  */
 import { ATTACHMENTS, US_STATES } from "../reference/codes";
 
-export const POOL_CONSENT_VERSION = "2026-09-v1";
+export const POOL_CONSENT_VERSION = "2026-09-v2";
+/** Consent versions that include the appeal-fix and frequency fields. */
+export const EXTENDED_CONSENT = new Set(["2026-09-v2"]);
+export const APPEAL_ARGUMENTS = ["documentation", "medical_necessity", "coding_correction", "frequency_exception", "coverage_dispute", "other"] as const;
+export type AppealArgument = (typeof APPEAL_ARGUMENTS)[number];
 
 export type PoolOutcome = "pending" | "paid" | "partially_paid" | "denied" | "appeal_won" | "appeal_lost";
 
@@ -34,6 +42,7 @@ export interface PoolLine {
   denied: boolean;
   carcs: string[]; // "CO-16"
   rarcs: string[]; // "N706"
+  freqBucket: 1 | 2 | 3 | null; // v2 only
 }
 
 export interface PoolRecord {
@@ -45,6 +54,9 @@ export interface PoolRecord {
   attachments: string[];
   outcome: PoolOutcome;
   daysToPayment: number | null;
+  appealAttachments: string[];         // v2 only
+  appealArgument: AppealArgument | null; // v2 only
+  extended: boolean;                   // true when the v2 fields are shared
   isSynthetic: boolean;
   lines: PoolLine[];
 }
@@ -58,6 +70,8 @@ export interface ClaimForPool {
   adjudicatedAt: Date | null;
   paidCents: number;
   attachments: string[];
+  appealAttachments: string[];
+  appealArgument: string | null;
   isSynthetic: boolean;
   payer: { name: string; verified: boolean };
   lines: { id: string; cdtCode: string }[];
@@ -85,7 +99,7 @@ export function outcomeOf(c: Pick<ClaimForPool, "status" | "appealStatus">): Poo
 
 export function toPoolRecord(
   c: ClaimForPool,
-  ctx: { id: string; contributor: string; region: string },
+  ctx: { id: string; contributor: string; region: string; extended?: boolean; freq?: Map<string, number> },
 ): { record: PoolRecord } | { skip: SkipReason } {
   if (c.status === "draft") return { skip: "draft" };
   if (!c.lines.length) return { skip: "no_procedures" };
@@ -101,6 +115,9 @@ export function toPoolRecord(
     attachments: [...new Set(c.attachments)].filter((a) => (ATTACHMENTS as readonly string[]).includes(a)).sort(),
     outcome: outcomeOf(c),
     daysToPayment: days !== null && days >= 0 && days <= 730 && c.paidCents > 0 ? days : null,
+    appealAttachments: ctx.extended ? [...new Set(c.appealAttachments)].filter((a) => (ATTACHMENTS as readonly string[]).includes(a)).sort() : [],
+    appealArgument: ctx.extended && (APPEAL_ARGUMENTS as readonly string[]).includes(c.appealArgument ?? "") ? (c.appealArgument as AppealArgument) : null,
+    extended: !!ctx.extended,
     isSynthetic: c.isSynthetic,
     lines: c.lines.map((l) => {
       const d = c.denials.filter((x) => x.claimLineId === l.id);
@@ -109,6 +126,7 @@ export function toPoolRecord(
         denied: d.length > 0,
         carcs: [...new Set(d.map((x) => `${x.groupCode}-${x.carc}`))].sort(),
         rarcs: [...new Set(d.map((x) => x.rarc).filter((x): x is string => !!x))].sort(),
+        freqBucket: ctx.extended ? bucket(ctx.freq?.get(l.id)) : null,
       };
     }),
   };
@@ -125,13 +143,20 @@ export function toPoolRecord(
   return { record };
 }
 
+function bucket(n: number | undefined): 1 | 2 | 3 | null {
+  if (!n || n < 1) return null;
+  return n >= 3 ? 3 : (n as 1 | 2);
+}
+
 export class DeidentificationError extends Error {}
 
 /** Re-validates a record's exact shape and every value. Throws on anything unexpected. */
 export function assertSafeHarbor(r: PoolRecord): void {
   const fail = (why: string) => { throw new DeidentificationError(`pool record rejected: ${why}`); };
   const keys = Object.keys(r).sort().join(",");
-  if (keys !== "attachments,contributor,daysToPayment,id,isSynthetic,lines,outcome,payer,planType,region") fail("unexpected fields");
+  if (keys !== "appealArgument,appealAttachments,attachments,contributor,daysToPayment,extended,id,isSynthetic,lines,outcome,payer,planType,region") fail("unexpected fields");
+  if (!r.appealAttachments.every((a) => (ATTACHMENTS as readonly string[]).includes(a))) fail("appeal attachments");
+  if (r.appealArgument !== null && !(APPEAL_ARGUMENTS as readonly string[]).includes(r.appealArgument)) fail("appeal argument");
   if (!UUID.test(r.id) || !UUID.test(r.contributor)) fail("ids must be random UUIDs");
   if (!PAYER.test(r.payer)) fail("payer");
   if (!PLAN_TYPES.has(r.planType)) fail("plan type");
@@ -139,10 +164,12 @@ export function assertSafeHarbor(r: PoolRecord): void {
   if (!r.attachments.every((a) => (ATTACHMENTS as readonly string[]).includes(a))) fail("attachments");
   if (!OUTCOMES.has(r.outcome)) fail("outcome");
   if (r.daysToPayment !== null && (!Number.isInteger(r.daysToPayment) || r.daysToPayment < 0 || r.daysToPayment > 730)) fail("days to payment");
-  if (typeof r.isSynthetic !== "boolean") fail("synthetic flag");
+  if (typeof r.isSynthetic !== "boolean" || typeof r.extended !== "boolean") fail("flags");
+  if (!r.extended && (r.appealAttachments.length || r.appealArgument !== null || r.lines.some((l) => l.freqBucket !== null))) fail("v2 fields without v2 consent");
   if (!r.lines.length) fail("no lines");
   for (const l of r.lines) {
-    if (Object.keys(l).sort().join(",") !== "carcs,cdt,denied,rarcs") fail("unexpected line fields");
+    if (Object.keys(l).sort().join(",") !== "carcs,cdt,denied,freqBucket,rarcs") fail("unexpected line fields");
+    if (l.freqBucket !== null && ![1, 2, 3].includes(l.freqBucket)) fail("frequency bucket");
     if (!CDT.test(l.cdt) || typeof l.denied !== "boolean") fail("line");
     if (!l.carcs.every((x) => CARC.test(x)) || !l.rarcs.every((x) => RARC.test(x))) fail("denial codes");
   }

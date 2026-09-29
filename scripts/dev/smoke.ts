@@ -43,12 +43,18 @@ async function main() {
     await page.locator("form button").first().click();
     await page.waitForURL(/\/(app|onboarding\/pool)$/);
   }
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("load");
+  await page.waitForTimeout(1500);
   if (page.url().endsWith("/onboarding/pool")) {
     console.log("onboarding →", (await page.locator("main").innerText()).replace(/\s+/g, " ").slice(0, 300));
     if (process.env.SMOKE_SHOTS) await page.screenshot({ path: `${process.env.SMOKE_SHOTS}/onboarding.png`, fullPage: true });
     await page.click(`button[value=${process.env.SMOKE_POOL === "no" ? "no" : "yes"}]`);
     await page.waitForURL("**/app");
+  }
+  if (process.env.SMOKE_INTEL) {
+    await intelFlow(page);
+    await browser.close();
+    return;
   }
   if (process.env.SMOKE_POOL) {
     await poolFlow(page);
@@ -168,6 +174,39 @@ async function poolFlow(page: import("playwright").Page) {
   console.log("after stop →", (await text()).slice(0, 160));
   await page.goto(`${base}/app/pool`);
   console.log("patterns after stop →", (await text()).slice(0, 160));
+}
+
+/** Phase 4: rules with evidence, rule matches on denied claims, recording an appeal. */
+async function intelFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  await page.goto(`${base}/app/pool`);
+  console.log("rules →", (await text()).slice(0, 900));
+  if (shots) await page.screenshot({ path: `${shots}/rules.png`, fullPage: false });
+  await page.goto(`${base}/app/claims?status=denied`);
+  const hit = page.locator("td a.bg-amber-50").first();
+  console.log("claims with a ClaimHive match:", await page.locator("td a.bg-amber-50").count());
+  if (shots) await page.screenshot({ path: `${shots}/claims-denied.png`, fullPage: false });
+  if (await hit.count()) {
+    await hit.click();
+    await page.waitForURL(/\/app\/claims\/[0-9a-f-]{36}$/);
+    console.log("claim →", (await text()).slice(0, 700));
+    const before = await page.locator("select[name=status]").inputValue();
+    const target = before === "drafted" ? "sent" : "drafted";
+    await page.selectOption("select[name=status]", target);
+    const boxes = page.locator("input[name=attachments]");
+    if (await boxes.count()) await boxes.first().check();
+    await page.selectOption("select[name=argument]", "documentation");
+    if (await page.locator("select[name=ruleKey] option").count() > 1) await page.selectOption("select[name=ruleKey]", { index: 1 });
+    await page.click("form button[type=submit]");
+    await page.waitForLoadState("load");
+  await page.waitForTimeout(1500);
+    await page.reload();
+    const shown = await page.locator("select[name=status]").inputValue();
+    if (shown !== target) throw new Error(`appeal form shows "${shown}" after saving "${target}"`);
+    console.log(`appeal saved and shown as ${shown}`);
+    if (shots) await page.screenshot({ path: `${shots}/claim.png`, fullPage: true });
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
