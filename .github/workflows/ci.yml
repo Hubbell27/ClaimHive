@@ -66,3 +66,91 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t claimhive:ci .
+
+  windows-demo:
+    # Builds ClaimHiveDemoSetup.exe, installs it on a real Windows machine, signs in, restarts, uninstalls.
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DEMO_APP: C:\Users\runneradmin\AppData\Local\Programs\ClaimHive Demo
+      DEMO_HOME: C:\Users\runneradmin\AppData\Local\ClaimHive Demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Build installer
+        run: ./desktop/build_windows.ps1
+      - name: Install silently (current user, no admin prompt)
+        run: |
+          $p = Start-Process desktop\dist\ClaimHiveDemoSetup.exe -Wait -PassThru -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=C:\ch-install.log'
+          if ($p.ExitCode -ne 0) { Get-Content C:\ch-install.log -Tail 40; throw "install failed ($($p.ExitCode))" }
+          $env:LOCALAPPDATA
+          if (-not (Test-Path "$env:DEMO_APP\launcher.mjs")) { throw "not installed where expected" }
+          "installed: $([math]::Round((Get-ChildItem $env:DEMO_APP -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)) MB"
+      - name: First start builds the demo database and data
+        run: |
+          $t = Get-Date
+          Start-Process "$env:DEMO_APP\node\node.exe" -ArgumentList "`"$env:DEMO_APP\launcher.mjs`" start --no-browser" -WorkingDirectory $env:DEMO_APP `
+            -RedirectStandardOutput C:\ch-start.out -RedirectStandardError C:\ch-start.err -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 180; $i++) {
+            try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3100/api/health -TimeoutSec 5).StatusCode -eq 200) { $ok = $true; break } } catch {}
+            if ((Test-Path C:\ch-start.out) -and (Select-String -Path C:\ch-start.out -Pattern "Problem:" -Quiet)) { break }
+            Start-Sleep 5
+          }
+          Get-Content C:\ch-start.out, C:\ch-start.err -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "the demo didn't start" }
+          "first start took $([int]((Get-Date) - $t).TotalSeconds)s"
+          $logins = Get-Content "$env:DEMO_HOME\Demo logins.txt" -Raw
+          if ($logins -notmatch "owner@demo.claimhive.test" -or $logins -notmatch "staff@demo.claimhive.test") { throw "sign-in details missing" }
+          (Invoke-WebRequest -UseBasicParsing http://localhost:3100/login).StatusCode
+      - name: Sign in with the demo login in Chrome (password change, MFA, setup, 12-month report)
+        run: |
+          $pw = ((Get-Content "$env:DEMO_HOME\Demo logins.txt") | Select-String -Pattern "Password:" | Select-Object -First 1).Line.Split(":")[1].Trim()
+          $env:SMOKE_URL = "http://localhost:3100"; $env:SMOKE_EMAIL = "owner@demo.claimhive.test"; $env:SMOKE_PASSWORD = $pw
+          $env:SMOKE_POOL = "yes"; $env:SMOKE_SETUP = "1"
+          $env:CHROMIUM_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          npx tsx scripts/dev/smoke.ts
+          if ($LASTEXITCODE -ne 0) { throw "browser sign-in failed" }
+      - name: Stop, then a quick second start keeps the data
+        run: |
+          & "$env:DEMO_APP\node\node.exe" "$env:DEMO_APP\launcher.mjs" stop
+          Start-Sleep 3
+          $down = $true; try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3100/api/health -TimeoutSec 3 | Out-Null; $down = $false } catch {}
+          if (-not $down) { throw "still running after stop" }
+          $t = Get-Date
+          Start-Process "$env:DEMO_APP\node\node.exe" -ArgumentList "`"$env:DEMO_APP\launcher.mjs`" start --no-browser" -WorkingDirectory $env:DEMO_APP -WindowStyle Hidden `
+            -RedirectStandardOutput C:\ch-start2.out -RedirectStandardError C:\ch-start2.err
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) { try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3100/api/health -TimeoutSec 5).StatusCode -eq 200) { $ok = $true; break } } catch {}; Start-Sleep 2 }
+          Get-Content C:\ch-start2.out -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "second start failed" }
+          "second start took $([int]((Get-Date) - $t).TotalSeconds)s"
+          if ((Select-String -Path C:\ch-start2.out -Pattern "Loading synthetic" -Quiet)) { throw "second start rebuilt the demo" }
+      - name: Uninstall removes the app and the demo data
+        run: |
+          $p = Start-Process "$env:DEMO_APP\unins000.exe" -Wait -PassThru -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          Start-Sleep 5
+          $down = $true; try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3100/api/health -TimeoutSec 3 | Out-Null; $down = $false } catch {}
+          if (-not $down) { throw "still running after uninstall" }
+          if (Test-Path "$env:DEMO_APP\launcher.mjs") { throw "app files left behind" }
+          if (Test-Path $env:DEMO_HOME) { throw "demo data left behind" }
+          "uninstalled cleanly"
+      - name: Logs (on failure)
+        if: failure()
+        run: |
+          Get-ChildItem "$env:DEMO_HOME\logs" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName -Tail 60 }
+          if (Test-Path C:\ch-install.log) { "== install log"; Get-Content C:\ch-install.log -Tail 40 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ClaimHiveDemoSetup
+          path: desktop/dist/ClaimHiveDemoSetup.exe
+          if-no-files-found: ignore
+          retention-days: 30

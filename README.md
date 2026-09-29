@@ -92,6 +92,16 @@ review, and is paid on a contingency of money recovered.
 - **Reason codes page:** every CARC, RARC and group code dental offices usually see (216), in plain English, each with what to do and whether it's worth appealing. Search by code (`16`, `CO-16`, `N706`) or by words (`x-ray`). It shows how often each code hit the practice in 12 months. Every code shown elsewhere (claims, claim page, Money, 12-month report) links to its entry
 - **Readiness:** `npm run readiness` / **Admin → Readiness** checks the deployment automatically (KMS, TLS, restricted role, RLS, audit log, no synthetic data, billing setup, AI BAA). [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md) lists everything a person must sign off
 
+## Try it on a Windows PC (demo installer)
+
+`ClaimHiveDemoSetup.exe` installs a self-contained demo for the current Windows user (no administrator rights needed). It bundles Node.js and PostgreSQL. Synthetic data only.
+
+1. Download it: GitHub → Actions → CI → the latest green run → **Artifacts → ClaimHiveDemoSetup** (a zip containing the .exe). It isn't code-signed yet, so Windows SmartScreen may warn: choose **More info → Run anyway**.
+2. Run it. The first start builds a private database on the PC and loads the demo practices (a few minutes). Later starts take seconds.
+3. Your browser opens at http://localhost:3100, along with **Demo logins.txt**: owner, biller and ClaimHive staff sign-ins with one-time passwords. You'll set a new password and scan a code with an authenticator app.
+
+Start menu → **ClaimHive Demo** also has *Stop*, *Reset demo data* (start over) and *sign-in details*. Everything listens on 127.0.0.1 only. Data lives in `%LOCALAPPDATA%\ClaimHive Demo`, and uninstalling removes it. The launcher is `desktop/launcher.mjs`; `desktop/build_windows.ps1` builds the installer, and the `windows-demo` CI job installs it, signs in, restarts and uninstalls on every push.
+
 ## Quick start (local, synthetic data)
 
 Requirements: Node 22+ and PostgreSQL 15+.
