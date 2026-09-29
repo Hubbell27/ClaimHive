@@ -136,6 +136,33 @@ describe("sharing with the pool", () => {
     expect(await denialRatesByPayerCode({ synthetic: false })).toEqual([]);
   });
 
+  it("filters narrow the list, and the 5-practice minimum is re-checked on the filtered group", async () => {
+    const all = await denialRatesByPayerCode({ synthetic: true, limit: 500 });
+    const payer = all[0].payer;
+    const byPayer = await denialRatesByPayerCode({ synthetic: true, payers: [payer], limit: 500 });
+    expect(byPayer.length).toBeGreaterThan(0);
+    expect(byPayer.every((r) => r.payer === payer)).toBe(true);
+    const byCode = await denialRatesByPayerCode({ synthetic: true, cdt: "D1110", limit: 500 });
+    expect(byCode.every((r) => r.cdt === "D1110")).toBe(true);
+    expect((await denialRatesByPayerCode({ synthetic: true, minLines: 50, limit: 500 })).every((r) => r.lines >= 50)).toBe(true);
+
+    // Find an insurer × procedure that clears 5 practices overall but not within one plan type:
+    // with that plan filter it must disappear, never show with fewer practices.
+    const perPlan = (await poolQuery(`
+      SELECT c.payer, l.cdt, c.plan_type, count(DISTINCT c.contributor)::int AS practices
+        FROM pool.claims c JOIN pool.claim_lines l ON l.claim_id = c.id
+       WHERE c.is_synthetic AND c.outcome <> 'pending' GROUP BY 1, 2, 3`)).rows;
+    const thin = perPlan.find((x) => x.practices < MIN_PRACTICES && all.some((a) => a.payer === x.payer && a.cdt === x.cdt));
+    expect(thin, "expected at least one group that only passes the minimum when plan types are combined").toBeTruthy();
+    const filtered = await denialRatesByPayerCode({ synthetic: true, planType: thin.plan_type, limit: 500 });
+    expect(filtered.some((r) => r.payer === thin.payer && r.cdt === thin.cdt)).toBe(false);
+    expect(filtered.every((r) => r.practices >= MIN_PRACTICES)).toBe(true);
+
+    const insights = await poolInsights(practices[0].id, { mine: true });
+    if (!insights.allowed) throw new Error("expected access");
+    expect(insights.denialRates.every((r) => insights.options.myPayers.includes(r.payer))).toBe(true);
+  });
+
   it("a changed claim replaces its pool record instead of adding another", async () => {
     const p = practices[0];
     const before = (await poolQuery("select count(*)::int n from pool.claims")).rows[0].n;

@@ -95,23 +95,61 @@ export interface DenialRateRow {
   rate: number;
 }
 
+export type PatternSort = "rate" | "volume" | "payer";
+
+export interface PatternFilter {
+  synthetic: boolean;
+  payers?: string[];      // insurer names (exact); empty/undefined = all
+  cdt?: string;           // one CDT code
+  category?: string;      // CDT category, resolved to codes by the caller
+  cdts?: string[];
+  planType?: string;
+  minLines?: number;      // hide rows with fewer procedures than this
+  sort?: PatternSort;
+  limit?: number;
+}
+
 /**
- * Denial rate by insurer × procedure, only where at least MIN_PRACTICES practices
- * contributed. Synthetic and live data are never mixed.
+ * Denial rate by insurer × procedure. Filters are applied BEFORE grouping, and the
+ * 5-practice minimum is checked on the filtered group, so narrowing a filter can
+ * never expose a pattern that fewer than MIN_PRACTICES practices contributed to.
+ * Synthetic and live data are never mixed.
  */
-export async function denialRatesByPayerCode(opts: { synthetic: boolean; payer?: string; limit?: number }): Promise<DenialRateRow[]> {
+export async function denialRatesByPayerCode(f: PatternFilter & { payer?: string }): Promise<DenialRateRow[]> {
+  const payers = f.payers?.length ? f.payers : f.payer ? [f.payer] : null;
+  const cdts = f.cdt ? [f.cdt] : f.cdts?.length ? f.cdts : null;
+  const order = f.sort === "volume" ? "count(*) DESC, c.payer, l.cdt"
+    : f.sort === "payer" ? "c.payer, l.cdt"
+    : "count(*) FILTER (WHERE l.denied)::float / count(*) DESC, count(*) DESC";
   const r = await poolDb().query(
     `SELECT c.payer, l.cdt, count(*)::int AS lines, count(*) FILTER (WHERE l.denied)::int AS denied,
             count(DISTINCT c.contributor)::int AS practices
        FROM pool.claims c JOIN pool.claim_lines l ON l.claim_id = c.id
-      WHERE c.is_synthetic = $1 AND ($2::text IS NULL OR c.payer = $2) AND c.outcome <> 'pending'
+      WHERE c.is_synthetic = $1 AND c.outcome <> 'pending'
+        AND ($2::text[] IS NULL OR c.payer = ANY($2))
+        AND ($3::text[] IS NULL OR l.cdt = ANY($3))
+        AND ($4::text IS NULL OR c.plan_type = $4)
       GROUP BY c.payer, l.cdt
-     HAVING count(DISTINCT c.contributor) >= $3
-      ORDER BY count(*) FILTER (WHERE l.denied)::float / count(*) DESC, count(*) DESC
-      LIMIT $4`,
-    [opts.synthetic, opts.payer ?? null, MIN_PRACTICES, opts.limit ?? 50],
+     HAVING count(DISTINCT c.contributor) >= $5 AND count(*) >= $6
+      ORDER BY ${order}
+      LIMIT $7`,
+    [f.synthetic, payers, cdts, f.planType ?? null, MIN_PRACTICES, Math.max(1, f.minLines ?? 1), Math.min(f.limit ?? 50, 500)],
   );
   return r.rows.map((x) => ({ ...x, rate: x.lines ? x.denied / x.lines : 0 }));
+}
+
+/** Insurers and procedures that have at least one pattern over the minimum (for filter menus). */
+export async function patternOptions(synthetic: boolean): Promise<{ payers: string[]; cdts: string[]; planTypes: string[] }> {
+  const r = await poolDb().query(
+    `SELECT c.payer, l.cdt, c.plan_type
+       FROM pool.claims c JOIN pool.claim_lines l ON l.claim_id = c.id
+      WHERE c.is_synthetic = $1 AND c.outcome <> 'pending'
+      GROUP BY c.payer, l.cdt, c.plan_type
+     HAVING count(DISTINCT c.contributor) >= $2`,
+    [synthetic, MIN_PRACTICES],
+  );
+  const uniq = (k: string) => [...new Set(r.rows.map((x) => x[k] as string))].sort();
+  return { payers: uniq("payer"), cdts: uniq("cdt"), planTypes: uniq("plan_type") };
 }
 
 export interface PoolHealth {

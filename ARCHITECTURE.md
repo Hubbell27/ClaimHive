@@ -322,6 +322,11 @@ capped at 730; no date of any kind is kept.
 - Every query that returns a pattern includes
   `HAVING count(DISTINCT contributor) >= 5` (`MIN_PRACTICES`), so no code path
   can return a pattern from fewer than 5 practices.
+- Insurer patterns can be filtered by insurer (or "only insurers my practice
+  bills"), procedure code or type, plan type and minimum sample size, and
+  sorted. Filters apply before grouping and the 5-practice minimum is checked
+  on the filtered group, so narrowing a filter can't expose a smaller group.
+  Tested.
 - Pooled patterns are shown only to contributing practices (`poolInsights`).
   Everyone always sees their own data.
 - Synthetic and live data are never mixed in a query.

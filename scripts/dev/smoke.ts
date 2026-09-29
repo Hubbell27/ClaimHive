@@ -155,6 +155,13 @@ async function poolFlow(page: import("playwright").Page) {
   await page.goto(`${base}/app/pool`);
   console.log("patterns →", (await text()).slice(0, 500));
   if (shots) await page.screenshot({ path: `${shots}/patterns.png`, fullPage: true });
+  await page.selectOption("select[name=code]", "cat:restorative");
+  await page.check("input[name=mine]");
+  await page.selectOption("select[name=min]", "10");
+  await page.click("form button[type=submit]");
+  await page.waitForURL(/code=cat%3Arestorative/);
+  console.log("filtered →", page.url().replace(base, ""), (await text()).slice(0, 400));
+  if (shots) await page.screenshot({ path: `${shots}/patterns-filtered.png`, fullPage: true });
   await page.goto(`${base}/app/settings`);
   await page.click("button[value=no]");
   await page.waitForURL(/settings\?saved=1/);
