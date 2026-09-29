@@ -103,6 +103,11 @@ export interface GenClaim {
   denials: GenDenial[];
   appealStatus: "none" | "sent" | "won" | "lost";
   recoveredCents: number;
+  /** Won appeals: the hidden rule behind the denial, and whether the appeal supplied the fix. */
+  appealRuleId?: string;
+  appealWithFix?: boolean;
+  /** Demo of a pre-submission catch: a rule that would have fired, fixed before sending (Phase 5 does this for real). */
+  protectedRuleId?: string;
 }
 export interface GenPatient { firstName: string; lastName: string; dob: string; memberId: string; claims: GenClaim[] }
 export interface GenPractice { name: string; state: string; patients: GenPatient[] }
@@ -113,6 +118,8 @@ export interface GenerateOptions {
   patientsPerPractice?: number;
   months?: number;
   endDate?: Date;
+  /** Claim-number prefix (3 letters). Separate prefixes keep independent datasets from matching each other's claims. */
+  claimPrefix?: string;
 }
 
 const DAY = 86_400_000;
@@ -217,6 +224,8 @@ export function generateDataset(opts: GenerateOptions = {}): GenPractice[] {
         // Appeals: some denials get appealed; winning is much likelier when the fix is supplied.
         let appealStatus: GenClaim["appealStatus"] = "none";
         let recovered = 0;
+        let appealRuleId: string | undefined;
+        let appealWithFix: boolean | undefined;
         if (denials.length && rand() < 0.4) {
           const rule = HIDDEN_RULES.find((r) => r.id === denials[0].ruleId);
           const withFix = rand() < 0.6;
@@ -225,13 +234,20 @@ export function generateDataset(opts: GenerateOptions = {}): GenPractice[] {
           if (!decided) appealStatus = "sent";
           else if (rand() < winRate) {
             appealStatus = "won";
+            appealRuleId = rule?.id;
+            appealWithFix = rule ? withFix : undefined;
             recovered = denials.reduce((s, dn) => s + Math.round(dn.amountCents * ratio), 0);
           } else appealStatus = "lost";
         }
 
+        // Claims that carried the attachment a payer rule demands: "caught before sending" (demo of Phase 5).
+        const caught = denials.length === 0 ? HIDDEN_RULES.find((r) => r.when === "missing_attachment" && codes.includes(r.cdt)
+          && (r.payer === "*" || r.payer === payer.name) && attachments.includes(r.attachment!)) : undefined;
+        const protectedRuleId = caught?.id;
+
         patient.claims.push({
-          payerCode: payer.payerCode, planType, claimNumber: `SYN-${claimSeq++}`, serviceDate, submittedAt, adjudicatedAt,
-          status, attachments, lines, denials, appealStatus, recoveredCents: recovered,
+          payerCode: payer.payerCode, planType, claimNumber: `${opts.claimPrefix ?? "SYN"}-${claimSeq++}`, serviceDate, submittedAt, adjudicatedAt,
+          status, attachments, lines, denials, appealStatus, recoveredCents: recovered, appealRuleId, appealWithFix, protectedRuleId,
         });
       }
       practice.patients.push(patient);

@@ -7,6 +7,7 @@ import { audit } from "./audit";
 import type { PracticeContext } from "./auth/rbac";
 import { withPractice } from "./db";
 import { keysFor } from "./practices";
+import { csvCell } from "./csv";
 
 export interface PatientInput {
   firstName: string;
@@ -15,8 +16,9 @@ export interface PatientInput {
   memberId?: string;
 }
 
-export interface PatientView extends PatientInput {
+export interface PatientView extends Omit<PatientInput, "dob"> {
   id: string;
+  dob?: string; // missing for patients first seen on a remittance
 }
 
 export async function createPatient(ctx: Pick<PracticeContext, "practiceId" | "userId" | "email">, input: PatientInput) {
@@ -32,6 +34,7 @@ export async function createPatient(ctx: Pick<PracticeContext, "practiceId" | "u
         dobEnc: keys.encrypt("patients", "dob", id, input.dob),
         memberIdEnc: input.memberId ? keys.encrypt("patients", "member_id", id, input.memberId) : null,
         lookupIndex: keys.lookupIndex(input.lastName, input.dob),
+        memberLookup: input.memberId ? keys.lookupIndex(input.memberId, input.lastName) : null,
       },
     }),
   );
@@ -49,7 +52,7 @@ export async function listPatients(ctx: Pick<PracticeContext, "practiceId" | "us
     id: r.id,
     firstName: keys.decrypt("patients", "first_name", r.id, r.firstNameEnc),
     lastName: keys.decrypt("patients", "last_name", r.id, r.lastNameEnc),
-    dob: keys.decrypt("patients", "dob", r.id, r.dobEnc),
+    dob: r.dobEnc ? keys.decrypt("patients", "dob", r.id, r.dobEnc) : undefined,
     memberId: r.memberIdEnc ? keys.decrypt("patients", "member_id", r.id, r.memberIdEnc) : undefined,
   }));
   await audit({ action: "phi.list", actorUserId: ctx.userId, actorEmail: ctx.email, practiceId: ctx.practiceId,
@@ -69,7 +72,7 @@ export async function findPatientsByLastNameDob(ctx: Pick<PracticeContext, "prac
 /** CSV export of the practice's patient list. Audited as an export. */
 export async function exportPatientsCsv(ctx: Pick<PracticeContext, "practiceId" | "userId" | "email">) {
   const patients = await listPatients(ctx, { take: 100_000 });
-  const esc = (v: string | undefined) => `"${(v ?? "").replace(/"/g, '""')}"`;
+  const esc = csvCell;
   const csv = ["first_name,last_name,dob,member_id", ...patients.map((p) =>
     [p.firstName, p.lastName, p.dob, p.memberId].map(esc).join(","))].join("\n");
   await audit({ action: "phi.export", actorUserId: ctx.userId, actorEmail: ctx.email, practiceId: ctx.practiceId,

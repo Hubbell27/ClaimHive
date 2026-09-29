@@ -26,6 +26,7 @@ enum PlanType {
   INDEMNITY
   MEDICAID
   MEDICARE_ADVANTAGE
+  UNKNOWN // the source didn't say (e.g. an aging report without a plan column)
 }
 
 enum ClaimStatus {
@@ -42,6 +43,33 @@ enum AppealStatus {
   sent
   won
   lost
+}
+
+enum ImportKind {
+  aging      // insurance aging report (CSV / Excel)
+  era835     // X12 835 remittance
+  claim837   // X12 837D dental claim
+  eob_pdf    // EOB PDF
+}
+
+enum ImportStatus {
+  mapping_needed
+  queued
+  processing
+  needs_review
+  done
+  failed
+}
+
+enum ReviewStatus {
+  open
+  accepted
+  dismissed
+}
+
+enum ResultKind {
+  recovered // money won back after a denial (cash received)
+  protected // a claim fixed before sending that was then paid (shown, never billed)
 }
 
 // ---------------------------------------------------------------- identity
@@ -155,14 +183,17 @@ model Patient {
   practiceId   String   @map("practice_id") @db.Uuid
   firstNameEnc Bytes    @map("first_name_enc")
   lastNameEnc  Bytes    @map("last_name_enc")
-  dobEnc       Bytes    @map("dob_enc")
+  dobEnc       Bytes?   @map("dob_enc") // remittances (835) don't carry a date of birth
   memberIdEnc  Bytes?   @map("member_id_enc")
   // Keyed hash of normalized last name + DOB for lookup without plaintext.
-  lookupIndex  String   @map("lookup_index")
+  lookupIndex  String?  @map("lookup_index")
+  // Keyed hash of normalized member ID + last name (matching remittances).
+  memberLookup String?  @map("member_lookup")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   claims       Claim[]
 
   @@index([practiceId, lookupIndex])
+  @@index([practiceId, memberLookup])
   @@map("patients")
 }
 
@@ -173,6 +204,10 @@ model Claim {
   payerId         String       @map("payer_id") @db.Uuid
   planType        PlanType     @map("plan_type")
   claimNumberEnc  Bytes?       @map("claim_number_enc")
+  // Keyed hash of the practice's claim number (837 CLM01 = 835 CLP01) for matching.
+  claimKey        String?      @map("claim_key")
+  // Which kinds of files have contributed to this claim, e.g. ["claim837", "era835"].
+  sources         String[]     @default([])
   serviceDate     DateTime     @map("service_date") @db.Date
   submittedAt     DateTime?    @map("submitted_at") @db.Date
   adjudicatedAt   DateTime?    @map("adjudicated_at") @db.Date
@@ -189,7 +224,10 @@ model Claim {
   payer           Payer        @relation(fields: [payerId], references: [id])
   lines           ClaimLine[]
   denials         Denial[]
+  results         ResultEvent[]
+  reviewItems     ReviewItem[]
 
+  @@index([practiceId, claimKey])
   @@index([practiceId, status])
   @@index([practiceId, serviceDate])
   @@map("claims")
@@ -226,4 +264,104 @@ model Denial {
 
   @@index([practiceId, carc])
   @@map("denials")
+}
+
+// ---------------------------------------------------------------- ingestion (PHI; RLS)
+
+model ImportBatch {
+  id            String       @id @default(uuid()) @db.Uuid
+  practiceId    String       @map("practice_id") @db.Uuid
+  kind          ImportKind
+  status        ImportStatus
+  // File names often contain patient names, so they're encrypted too.
+  fileNameEnc   Bytes        @map("file_name_enc")
+  // Keyed hash of the file contents: refuses the same file twice.
+  fileKey       String       @map("file_key")
+  // Encrypted original, kept for re-processing and review; purged after 90 days.
+  fileEnc       Bytes?       @map("file_enc")
+  sizeBytes     Int          @map("size_bytes")
+  // Column mapping (aging reports): target field -> source header. Headers only, no PHI.
+  mapping       Json?
+  detectedSystem String?     @map("detected_system")
+  rowsTotal     Int          @default(0) @map("rows_total")
+  claimsCreated Int          @default(0) @map("claims_created")
+  claimsUpdated Int          @default(0) @map("claims_updated")
+  rowsSkipped   Int          @default(0) @map("rows_skipped")
+  reviewCount   Int          @default(0) @map("review_count")
+  deniedCents   Int          @default(0) @map("denied_cents")
+  paidCents     Int          @default(0) @map("paid_cents")
+  // Short, PHI-free problem codes and row numbers only.
+  problems      Json         @default("[]")
+  createdBy     String       @map("created_by") @db.Uuid
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  finishedAt    DateTime?    @map("finished_at") @db.Timestamptz
+  reviewItems   ReviewItem[]
+  results       ResultEvent[]
+
+  @@unique([practiceId, fileKey])
+  @@index([practiceId, createdAt])
+  @@map("import_batches")
+}
+
+// A saved column mapping, reused automatically when a report with the same headers is uploaded.
+model ImportMapping {
+  id              String   @id @default(uuid()) @db.Uuid
+  practiceId      String   @map("practice_id") @db.Uuid
+  headerSignature String   @map("header_signature")
+  mapping         Json
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([practiceId, headerSignature])
+  @@map("import_mappings")
+}
+
+// Something the importer wasn't sure about. A person confirms or corrects it before it counts.
+model ReviewItem {
+  id          String       @id @default(uuid()) @db.Uuid
+  practiceId  String       @map("practice_id") @db.Uuid
+  batchId     String       @map("batch_id") @db.Uuid
+  claimId     String?      @map("claim_id") @db.Uuid
+  status      ReviewStatus @default(open)
+  // Encrypted JSON: the extracted claim and a confidence score per field.
+  payloadEnc  Bytes        @map("payload_enc")
+  // PHI-free: which fields are uncertain and why, e.g. ["paid_amount: two candidates"].
+  flags       String[]     @default([])
+  minConfidence Float      @map("min_confidence")
+  resolvedBy  String?      @map("resolved_by") @db.Uuid
+  resolvedAt  DateTime?    @map("resolved_at") @db.Timestamptz
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  batch       ImportBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  claim       Claim?       @relation(fields: [claimId], references: [id], onDelete: SetNull)
+
+  @@index([practiceId, status])
+  @@map("review_items")
+}
+
+// The results ledger: every dollar recovered or protected, what did it, and the evidence.
+// The results page, the monthly report and (Phase 7) contingency invoices all read from here.
+model ResultEvent {
+  id           String       @id @default(uuid()) @db.Uuid
+  practiceId   String       @map("practice_id") @db.Uuid
+  claimId      String       @map("claim_id") @db.Uuid
+  kind         ResultKind
+  amountCents  Int          @map("amount_cents")
+  // True only when the money came through a ClaimHive-flagged fix or a ClaimHive appeal.
+  // Only attributed, recovered money is billable.
+  attributed   Boolean
+  // Stable code for how it was won, e.g. "appeal_with_attachment", "attachment_added_before_sending".
+  method       String
+  // One plain-English sentence, PHI-free, e.g. "Appealed with the X-ray the insurer asked for (CARC 16 / N706)".
+  explanation  String
+  // PHI-free evidence: payer, codes, denial reason, rule id, and dates.
+  evidence     Json         @default("{}")
+  occurredAt   DateTime     @map("occurred_at") @db.Date
+  sourceBatchId String?     @map("source_batch_id") @db.Uuid
+  isSynthetic  Boolean      @default(false) @map("is_synthetic")
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  claim        Claim        @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  sourceBatch  ImportBatch? @relation(fields: [sourceBatchId], references: [id], onDelete: SetNull)
+
+  @@unique([claimId, kind, method])
+  @@index([practiceId, occurredAt])
+  @@map("result_events")
 }

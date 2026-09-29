@@ -15,7 +15,8 @@ export type AuditAction =
   | "auth.login" | "auth.logout" | "auth.mfa" | "auth.mfa_enrolled" | "auth.password_change" | "auth.denied"
   | "phi.view" | "phi.list" | "phi.edit" | "phi.create" | "phi.export"
   | "practice.create" | "practice.switch" | "practice.pool_opt_in" | "member.invite" | "member.role_change"
-  | "member.remove" | "admin.view" | "synthetic.generate" | "audit.view";
+  | "member.remove" | "admin.view" | "synthetic.generate" | "audit.view"
+  | "import.upload" | "import.map" | "import.process" | "report.export";
 
 export interface AuditInput {
   action: AuditAction;

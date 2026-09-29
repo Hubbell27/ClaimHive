@@ -1,6 +1,9 @@
 import { requirePractice } from "@/lib/auth/rbac";
 import { moneySummary, usd } from "@/lib/money";
 import { CARC } from "@/lib/reference/codes";
+import { resultsSummary } from "@/lib/results/ledger";
+import { last12 } from "@/lib/results/period";
+import Link from "next/link";
 
 const carcLabel = new Map(CARC.map((c) => [c.code, c.label]));
 
@@ -18,6 +21,8 @@ function Tile({ label, cents, tone, note }: { label: string; cents: number; tone
 export default async function MoneyPage() {
   const ctx = await requirePractice("dashboard.view");
   const m = await moneySummary(ctx.practiceId);
+  const p = last12();
+  const r = await resultsSummary(ctx.practiceId, p.from, p.to);
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Your money, last 12 months</h1>
@@ -27,6 +32,13 @@ export default async function MoneyPage() {
         <Tile label="Recovered on appeal" cents={m.recovered} tone="saved" note="won back after a denial" />
         <Tile label="Lost for good" cents={m.lost} tone="lost" note="appeal lost, or never appealed in time" />
       </div>
+      <Link href="/app/results" className="card flex flex-wrap items-center justify-between gap-2 border-2 border-money-saved/30 hover:bg-stone-50">
+        <span>
+          <span className="block text-sm font-semibold text-stone-500">ClaimHive brought in or protected</span>
+          <span className="text-3xl font-bold text-money-saved">{usd(r.recoveredCents + r.protectedCents)}</span>
+        </span>
+        <span className="text-sm text-stone-600">{usd(r.recoveredCents)} recovered · {usd(r.protectedCents)} protected · see how →</span>
+      </Link>
       <section className="card">
         <h2 className="mb-3 text-lg font-bold">Biggest denial causes</h2>
         <table className="w-full text-sm">

@@ -16,7 +16,9 @@ const securityHeaders = [
 
 const config: NextConfig = {
   poweredByHeader: false,
-  serverExternalPackages: ["@node-rs/argon2", "pg-boss", "pino"],
+  serverExternalPackages: ["@node-rs/argon2", "pg-boss", "pino", "unpdf", "read-excel-file", "exceljs"],
+  // Import uploads (aging reports, 835/837 files, EOB PDFs) up to 10 MB; the importer enforces the same limit.
+  experimental: { serverActions: { bodySizeLimit: "11mb" } },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

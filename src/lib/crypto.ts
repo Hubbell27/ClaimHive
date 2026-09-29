@@ -110,6 +110,11 @@ export class PracticeKeys {
     return open(this.encKey, Buffer.from(blob), this.aad(table, column, rowId)).toString("utf8");
   }
 
+  /** Keyed fingerprint of raw bytes (e.g. an uploaded file), so duplicates are caught without storing a plain hash. */
+  fingerprint(purpose: string, data: Uint8Array): string {
+    return createHmac("sha256", this.indexKey).update(`${purpose}\0`).update(data).digest("hex");
+  }
+
   /** Deterministic keyed hash for exact-match lookup (e.g. last name + DOB). */
   lookupIndex(...parts: string[]): string {
     const norm = parts.map((p) => p.normalize("NFKD").replace(/[^\p{L}\p{N}]/gu, "").toLowerCase()).join("|");

@@ -5,7 +5,7 @@ ClaimHive learns from pooled, de-identified denial data across practices,
 catches likely denials before a claim is submitted, drafts appeals for staff to
 review, and is paid on a contingency of money recovered.
 
-> **Development status:** Phase 1 (foundation and security). **Synthetic data
+> **Development status:** Phase 2 (data ingestion and results). **Synthetic data
 > only.** No real patient data exists in, or may be loaded into, any development
 > or test environment.
 
@@ -19,6 +19,13 @@ review, and is paid on a contingency of money recovered.
 - Logs and error messages that never contain patient data
 - Synthetic data generator: fictional payers with hidden denial rules for later phases to discover
 - Money dashboard: amount denied, still recoverable, recovered, lost, and the biggest causes
+
+## What Phase 2 adds
+
+- **Imports:** insurance aging reports (CSV or Excel) from any practice management system, with a column-mapping screen that's remembered per layout; 835 remittances; 837D claim files; and EOB PDFs, read locally with uncertain fields sent to a review queue
+- Everything is merged into one claim model: payer, plan type, CDT codes, tooth/surface, attachments, billed, paid, denial codes (CARC/RARC), dates and appeal status
+- **Results page:** dollars recovered and protected, how each was won (with evidence), by insurer, and a monthly PDF with no patient details. Only recovered money through ClaimHive is billable; protected money is shown, never billed
+- **Sample files:** in development, the Imports page offers synthetic sample files to try every importer end to end
 
 ## Quick start (local, synthetic data)
 
@@ -70,7 +77,9 @@ SMOKE_EMAIL=owner@demo.claimhive.test SMOKE_PASSWORD='<temp password>' npm run s
 ```
 
 The smoke test signs in and enrolls MFA, so each demo login can be used for one
-smoke run.
+smoke run. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
+confirm the mapping, clear the review queue and download the monthly PDF, with
+the worker running (`npm run worker`).
 
 ## Environment
 

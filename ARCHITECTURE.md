@@ -1,7 +1,7 @@
 # ClaimHive architecture
 
-This document describes what exists (Phase 1) and the reasoning behind it. It is
-updated at the end of every phase.
+This document describes what exists (Phases 1–2) and the reasoning behind it.
+It is updated at the end of every phase.
 
 ## System overview
 
@@ -35,8 +35,10 @@ Source layout:
 | `src/lib/audit.ts`, `src/lib/logger.ts` | Audit trail; PHI-free logging |
 | `src/lib/phi.ts` | The only module that reads or writes patient identifiers (always audited) |
 | `src/lib/money.ts` | Dollar figures shown on the dashboard |
+| `src/lib/ingest/*` | Importers (aging, 835, 837D, EOB PDF), merge, pipeline |
+| `src/lib/results/*` | Results ledger, reporting periods, monthly PDF |
 | `src/lib/synthetic/*` | Synthetic data generator and loader |
-| `src/lib/actions/*` | Server actions (auth, practice, admin) |
+| `src/lib/actions/*` | Server actions (auth, practice, admin, imports) |
 | `src/worker/` | Background job worker |
 | `tests/` | Vitest suites that run against a real PostgreSQL |
 
@@ -177,6 +179,86 @@ recoverable (denied, no appeal decision yet, within 180 days), recovered on
 appeal, lost for good, and the biggest causes by payer and reason code. The
 dashboard leads with these numbers ("always show the money").
 
+## Data ingestion (Phase 2)
+
+```
+upload ──▶ detectKind (by content) ──▶ import_batches (file encrypted, keyed fingerprint)
+              │ aging report: new layout → mapping screen (confirmed once, remembered)
+              ▼
+         pg-boss "import.process" ──▶ parser ──▶ NormalizedClaim[] ──▶ mergeClaims ──▶ claims / lines / denials
+                                        │ EOB below confidence threshold            └▶ result_events (ledger)
+                                        ▼
+                                   review_items ──▶ a person confirms/corrects ──▶ mergeClaims
+```
+
+**Parsers** (`src/lib/ingest/`) are pure functions that produce one claim shape
+(`types.ts`). A field a source doesn't carry stays undefined and is never guessed.
+
+- **835 / 837D** (`x12.ts`) read the delimiters from the ISA segment, so any
+  clearinghouse's files parse. 835: CLP/SVC/CAS/LQ/MOA give payment, denials
+  and remark codes. Routine adjustments (contractual CO-45, deductible,
+  co-insurance, co-pay) are not denials. 837D: CLM/SV3/TOO/PWK give procedures,
+  teeth, surfaces and attachments (PWK report types map to X-ray, perio chart,
+  narrative, photo). Claim filing indicators map to plan types.
+- **Aging reports** (`aging.ts`) accept CSV or Excel from any PM system. A
+  synonym list covers how Dentrix, Eaglesoft, Open Dental, Curve, Denticon and
+  others label columns. It is a best guess until checked against real exports,
+  so a new layout is always confirmed once on the mapping screen, then
+  remembered by header signature. Title blocks and totals rows are skipped.
+  Rows group into claims by claim number, or by patient + date + carrier.
+- **EOB PDFs** (`eob.ts`) are read locally with pdf.js. That build contains no
+  `eval`/`new Function` path. The table header tells which money column is
+  which. Each field gets a confidence score; below 0.85 the claim goes to the
+  review queue, and nothing counts until a person confirms it. Scanned PDFs
+  (no text) go straight to review. AWS Textract (under the BAA) will read them
+  at deployment.
+
+**Merging** (`merge.ts`) matches on claim number (a keyed hash, since 837 CLM01
+equals 835 CLP01). Failing that, it matches on patient + carrier + date of
+service. Patients match on last name + DOB, or member ID + last name. Aging
+reports without either compare decrypted names only among that carrier's claims
+on that date, and an ambiguous match creates a new claim rather than guessing.
+Two claims with different claim numbers never merge. Each source owns what it
+knows best: the 837 owns procedures and attachments, the 835/EOB owns payment
+and denials, and the aging report only fills gaps. A remittance older than the
+current one is ignored.
+
+**Security:**
+- Uploads are capped at 10 MB and identified by content, not name.
+- Excel files are checked for zip bombs (100 MB unpacked limit) before parsing.
+- File names and contents are encrypted under the practice key, and the same
+  file twice is refused via a keyed fingerprint.
+- Stored originals are purged after 90 days by a daily job.
+- Problems are recorded as row numbers + codes, never cell contents.
+- Viewing file names, mapping samples, review items or claims is audited.
+
+## Results ledger: what ClaimHive recovered and protected
+
+`result_events` records every dollar with its **kind**, **method**, a
+PHI-free **explanation** and **evidence** (payer, CDT codes, CARC/RARC, rule,
+dates). The results page, the monthly PDF and, in Phase 7, contingency
+invoices all read this one table, so they can't disagree.
+
+- **recovered**: money that arrived after a denial. It's billable only when
+  `attributed`, meaning it came through a ClaimHive-flagged fix or a ClaimHive
+  appeal (`isClaimHiveAttributed`). Phase 2 can only observe payments, so money
+  an office recovers on its own is shown as "Recovered by your team" and never
+  billed. Phases 5 and 6 supply the attribution links.
+- **protected**: a claim flagged before sending, fixed, then paid. It's shown,
+  never billed (per the owner's decision).
+- A claim paid after a denial keeps its denials as history. The difference is
+  credited once per claim and method, so re-importing a remittance can't
+  double-count.
+- The ledger is append-only: the app role has only SELECT and INSERT (the
+  migration explicitly revokes the UPDATE/DELETE that default privileges would
+  grant), and a trigger rejects UPDATE for every role. Rows go away only with
+  their claim.
+- Synthetic practices get demo ledger rows, flagged `is_synthetic` and labeled
+  on the page, so the office sees what Phases 5–6 will produce.
+
+The **Results** page and the **monthly PDF** show no patient details
+(claim references are ClaimHive's own ids), so an office can share them.
+
 ## Reference codes
 
 `src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
@@ -194,11 +276,15 @@ and need a license before production use.
 | Multi-practice users | Memberships | Billing services work for several practices |
 | De-identification (Phase 3) | HIPAA Safe Harbor | Clear, auditable rule set |
 | Pooling | Explicit opt-in by the owner | Consent is clear and recorded (who, when) |
+| PM systems (Phase 2) | Recognize every common system's headers; always confirm a new layout once | Exports vary by version and report; one confirmation beats silent mis-mapping |
+| EOB reading (Phase 2) | Local text extraction first; AWS Textract for scans at deployment | Patient data stays on ClaimHive's servers; Textract is covered by the AWS BAA |
+| Protected money | Shown, never billed | "Would it have been denied?" is hard to prove; only verified recovered cash is billed |
+| Results report | Live page + monthly PDF, no patient details | Easy to show and share the benefit |
 | AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
 
 ## Not yet built (by phase)
 
-2. Data ingestion. 3. De-identification and the pool (Safe Harbor pipeline,
+3. De-identification and the pool (Safe Harbor pipeline,
 onboarding opt-in step). 4. Denial intelligence engine. 5. Pre-submission claim
 check. 6. Appeal generator. 7. Recovery tracking and billing. 8. Pilot
 readiness (AWS under a BAA, KMS, the pilot checklist in the README).

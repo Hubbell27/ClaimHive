@@ -42,6 +42,11 @@ async function main() {
     await page.locator("form button").first().click();
     await page.waitForURL("**/app");
   }
+  if (process.env.SMOKE_IMPORTS) {
+    await importFlow(page);
+    await browser.close();
+    return;
+  }
   console.log("dashboard:", (await page.locator("main").innerText()).replace(/\s+/g, " ").slice(0, 400));
   for (const p of ["patients", "members", "audit", "settings"]) {
     const r = await page.goto(`${base}/app/${p}`);
@@ -53,4 +58,74 @@ async function main() {
   console.log("admin as practice user ->", admin?.status(), page.url());
   await browser.close();
 }
+/** Phase 2: import every synthetic sample through the UI, map, review, then check Results and the PDF. */
+async function importFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  const upload = async (file: string) => {
+    const res = await page.request.get(`${base}/api/dev/samples/${file}`);
+    if (res.status() !== 200) throw new Error(`sample ${file}: ${res.status()}`);
+    await page.goto(`${base}/app/imports`);
+    await page.setInputFiles("input[type=file]", { name: file, mimeType: "application/octet-stream", buffer: Buffer.from(await res.body()) });
+    await page.click("form button[type=submit]");
+    await page.waitForURL(/\/app\/imports\/[0-9a-f-]{36}$/);
+    for (let i = 0; i < 40; i++) {
+      const t = await text();
+      if (/Done|Needs a check|Choose columns|Which column|Couldn't read/.test(t) && !/Waiting|Processing/.test(t.slice(0, 200))) break;
+      await page.waitForTimeout(500);
+      await page.reload();
+    }
+    // A new report layout is confirmed once on the mapping screen (ClaimHive's guesses pre-filled).
+    if (process.env.SMOKE_ACCEPT_MAPPING !== "0" && /Which column/.test(await text()) && !/Not in this report Who/.test(await text())) {
+      await page.click("form button[type=submit]");
+      await page.waitForTimeout(3000);
+      await page.reload();
+    }
+    console.log(file, "→", (await text()).slice(0, 230));
+  };
+  await upload("1-claims.837");
+  await upload("2-remittance.835");
+  await upload("3-appeal-payments.835");
+  await upload("aging-dentrix-style.csv");
+  await upload("aging-opendental-style.xlsx");
+  await upload("aging-unusual-columns.csv");
+  if (await page.locator("select[name=map_payer]").count()) {
+    await page.selectOption("select[name=map_patientName]", "Who");
+    await page.selectOption("select[name=map_payer]", "Ins");
+    await page.selectOption("select[name=map_serviceDate]", "When");
+    await page.selectOption("select[name=map_billed]", "Owed by ins");
+    await page.click("form button[type=submit]");
+    await page.waitForTimeout(3000);
+    await page.reload();
+    console.log("after mapping →", (await text()).slice(0, 200));
+  }
+  await upload("eob-clear.pdf");
+  await upload("eob-hard-to-read.pdf");
+  await page.goto(`${base}/app/review`);
+  console.log("review queue →", (await text()).slice(0, 200));
+  const item = page.locator("a[href^='/app/review/']").first();
+  if (await item.count()) {
+    await item.click();
+    await page.waitForURL(/\/app\/review\/[0-9a-f-]{36}$/);
+    if (shots) await page.screenshot({ path: `${shots}/review.png`, fullPage: true });
+    await page.click("button[value=accept]");
+    await page.waitForURL(/\/app\/review$/);
+    console.log("after accept →", (await text()).slice(0, 120));
+  }
+  await page.goto(`${base}/app/results`);
+  console.log("results →", (await text()).slice(0, 700));
+  if (shots) await page.screenshot({ path: `${shots}/results.png`, fullPage: true });
+  const month = new Date().toISOString().slice(0, 7);
+  const pdf = await page.request.get(`${base}/api/reports/results?month=${month}`);
+  const bytes = Buffer.from(await pdf.body());
+  console.log("pdf", pdf.status(), pdf.headers()["content-type"], bytes.length, "bytes", bytes.subarray(0, 5).toString());
+  if (shots) (await import("node:fs")).writeFileSync(`${shots}/results-${month}.pdf`, bytes);
+  await page.goto(`${base}/app/claims?status=denied`);
+  console.log("claims →", (await text()).slice(0, 300));
+  await page.goto(`${base}/app/imports`);
+  if (shots) await page.screenshot({ path: `${shots}/imports.png`, fullPage: true });
+  await page.goto(`${base}/app`);
+  if (shots) await page.screenshot({ path: `${shots}/dashboard.png`, fullPage: true });
+}
+
 main().catch((e) => { console.error(e); process.exit(1); });

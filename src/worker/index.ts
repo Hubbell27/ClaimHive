@@ -4,7 +4,9 @@
  */
 import "dotenv/config";
 import { audit } from "../lib/audit";
-import { boss, QUEUES, type SyntheticJob } from "../lib/jobs";
+import { prisma } from "../lib/db";
+import { processBatch, purgeOldFiles } from "../lib/ingest/pipeline";
+import { boss, QUEUES, type ImportJob, type SyntheticJob } from "../lib/jobs";
 import { log } from "../lib/logger";
 import { loadSyntheticDataset } from "../lib/synthetic/load";
 
@@ -17,6 +19,15 @@ async function main() {
       details: { practices: r.practices.length, patients: r.patients, claims: r.claims, denials: r.denials } });
     log.info({ event: "job.done", job: QUEUES.syntheticGenerate, jobId: job.id, count: r.claims, durationMs: Date.now() - started });
   });
+  await b.work<ImportJob>(QUEUES.importProcess, { batchSize: 1 }, async ([job]) => {
+    await processBatch(job.data.practiceId, job.data.batchId);
+  });
+  await b.work(QUEUES.purgeFiles, async () => {
+    let n = 0;
+    for (const p of await prisma().practice.findMany({ select: { id: true } })) n += await purgeOldFiles(p.id);
+    log.info({ event: "job.done", job: QUEUES.purgeFiles, count: n });
+  });
+  await b.schedule(QUEUES.purgeFiles, "17 3 * * *"); // daily, 03:17 UTC
   log.info({ event: "worker.started" });
 }
 
