@@ -51,6 +51,11 @@ async function main() {
     await page.click(`button[value=${process.env.SMOKE_POOL === "no" ? "no" : "yes"}]`);
     await page.waitForURL("**/app");
   }
+  if (process.env.SMOKE_PRECHECK) {
+    await precheckFlow(page);
+    await browser.close();
+    return;
+  }
   if (process.env.SMOKE_INTEL) {
     await intelFlow(page);
     await browser.close();
@@ -207,6 +212,50 @@ async function intelFlow(page: import("playwright").Page) {
     console.log(`appeal saved and shown as ${shown}`);
     if (shots) await page.screenshot({ path: `${shots}/claim.png`, fullPage: true });
   }
+}
+
+/** Phase 5: check one claim by hand, tick the fix, then check an 837 before sending. */
+async function precheckFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  const settle = async () => { await page.waitForLoadState("load"); await page.waitForTimeout(1500); };
+  await page.goto(`${base}/app/check/new`);
+  await page.fill("input[name=firstName]", "Tess");
+  await page.fill("input[name=lastName]", "Smokecheck");
+  await page.fill("input[name=dob]", "1980-05-05");
+  await page.selectOption("select[name=payer]", "Summit Dental Mutual");
+  for (const i of [0, 1]) { await page.fill(`input[name=cdt_${i}]`, "D4341"); await page.fill(`input[name=fee_${i}]`, "250"); }
+  if (shots) await page.screenshot({ path: `${shots}/check-form.png`, fullPage: true });
+  await page.click("form button[type=submit]");
+  await page.waitForURL(/\/app\/check\/[0-9a-f-]{36}$/);
+  await settle();
+  const before = await page.getByTestId("at-risk").innerText();
+  console.log("check →", (await text()).slice(0, 700));
+  if (shots) await page.screenshot({ path: `${shots}/check-result.png`, fullPage: true });
+  const fix = page.getByRole("button", { name: /I've attached the perio chart/ });
+  if (!(await fix.count())) throw new Error("expected the perio chart finding");
+  await fix.click();
+  await settle();
+  await page.reload();
+  const after = await page.getByTestId("at-risk").innerText();
+  console.log(`at risk before fix: ${before} | after: ${after}`);
+  if (after === before) throw new Error("risk did not change after the fix");
+  if (shots) await page.screenshot({ path: `${shots}/check-fixed.png`, fullPage: true });
+
+  // 837 before sending.
+  const { generateDataset } = await import("../../src/lib/synthetic/generator");
+  const { build837 } = await import("../../src/lib/synthetic/files");
+  const [data] = generateDataset({ seed: Date.now() % 100000, practices: 1, patientsPerPractice: 25, claimPrefix: "SMK" });
+  await page.goto(`${base}/app/check`);
+  await page.setInputFiles("input[type=file]", { name: "outgoing.837", mimeType: "text/plain", buffer: Buffer.from(build837(data)) });
+  await page.getByRole("button", { name: "Check these claims" }).click();
+  await page.waitForURL(/\/app\/imports\/[0-9a-f-]{36}$/);
+  for (let i = 0; i < 30 && !/Money at risk/.test(await text()); i++) { await page.waitForTimeout(2000); await page.reload(); }
+  console.log("837 check →", (await text()).slice(0, 600));
+  if (shots) await page.screenshot({ path: `${shots}/check-batch.png`, fullPage: true });
+  await page.goto(`${base}/app/check`);
+  console.log("hub →", (await text()).slice(0, 400));
+  if (shots) await page.screenshot({ path: `${shots}/check-hub.png`, fullPage: true });
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

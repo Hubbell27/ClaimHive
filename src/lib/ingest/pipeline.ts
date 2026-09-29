@@ -16,6 +16,7 @@ import { headerSignature, parseAging, readTable, suggestMapping, validateMapping
 import { extractEob, minConfidence, pdfText, REVIEW_THRESHOLD, type EobExtraction } from "./eob";
 import { mergeClaims } from "./merge";
 import { enqueuePoolSync } from "../pool/sync";
+import { afterImport, runCheck } from "../precheck/check";
 import type { NormalizedClaim, ParseProblem, ParseResult } from "./types";
 import { parse835, parse837, parseX12, X12Error } from "./x12";
 
@@ -54,10 +55,12 @@ export interface UploadOutcome {
   needsMapping: boolean;
 }
 
-export async function createImport(ctx: Actor, fileName: string, bytes: Uint8Array): Promise<UploadOutcome> {
+export async function createImport(ctx: Actor, fileName: string, bytes: Uint8Array, opts: { purpose?: "record" | "precheck" } = {}): Promise<UploadOutcome> {
   if (bytes.byteLength === 0) throw new ImportError("That file is empty.");
   if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new ImportError("Files can be up to 10 MB. Split larger exports by date range.");
   const kind = detectKind(bytes, fileName);
+  const purpose = opts.purpose ?? "record";
+  if (purpose === "precheck" && kind !== "claim837") throw new ImportError("To check claims before sending, upload the 837D file you're about to send.");
   const keys = await keysFor(ctx.practiceId);
   const fileKey = keys.fingerprint("import-file", bytes);
   const id = crypto.randomUUID();
@@ -84,7 +87,7 @@ export async function createImport(ctx: Actor, fileName: string, bytes: Uint8Arr
       id, practiceId: ctx.practiceId, kind, status: needsMapping ? "mapping_needed" : "queued",
       fileNameEnc: keys.encrypt("import_batches", "file_name", id, fileName.slice(0, 200)),
       fileKey, fileEnc: keys.encrypt("import_batches", "file", id, Buffer.from(bytes).toString("base64")),
-      sizeBytes: bytes.byteLength, mapping: mapping ?? undefined, detectedSystem: detectedSystem ?? null, createdBy: ctx.userId,
+      sizeBytes: bytes.byteLength, mapping: mapping ?? undefined, detectedSystem: detectedSystem ?? null, createdBy: ctx.userId, purpose,
     },
   }));
   await audit({ action: "import.upload", actorUserId: ctx.userId, actorEmail: ctx.email, practiceId: ctx.practiceId,
@@ -162,7 +165,7 @@ export async function processBatch(practiceId: string, batchId: string): Promise
     }
 
     const stats = await withPractice(practiceId, async (tx) => {
-      const s = await mergeClaims(tx, keys, parsed.claims, { batchId, isSynthetic: practice.isSynthetic });
+      const s = await mergeClaims(tx, keys, parsed.claims, { batchId, isSynthetic: practice.isSynthetic, asDraft: batch.purpose === "precheck" });
       const problems: ParseProblem[] = [...parsed.problems, ...s.problems].slice(0, 200);
       if (review) {
         const id = crypto.randomUUID();
@@ -172,12 +175,14 @@ export async function processBatch(practiceId: string, batchId: string): Promise
             flags: review.flags.slice(0, 20), minConfidence: minConfidence(review.confidence) },
         });
       }
+      // A pre-send batch stays "processing" until every claim is scored (the page shows the totals when it's done).
+      const scoring = batch.purpose === "precheck" && !review;
       await tx.importBatch.update({
         where: { id: batchId },
         data: {
-          status: review ? "needs_review" : "done", rowsTotal: parsed.rows, claimsCreated: s.created, claimsUpdated: s.updated,
+          status: review ? "needs_review" : scoring ? "processing" : "done", rowsTotal: parsed.rows, claimsCreated: s.created, claimsUpdated: s.updated,
           rowsSkipped: s.skipped + parsed.problems.length, reviewCount: review ? 1 : 0, deniedCents: s.deniedCents, paidCents: s.paidCents,
-          problems: problems as never, finishedAt: review ? null : new Date(),
+          problems: problems as never, finishedAt: review || scoring ? null : new Date(),
         },
       });
       return s;
@@ -185,6 +190,19 @@ export async function processBatch(practiceId: string, batchId: string): Promise
     await audit({ action: "import.process", actorUserId: batch.createdBy, practiceId, resourceType: "import_batch", resourceId: batchId,
       details: { kind: batch.kind, created: stats.created, updated: stats.updated, skipped: stats.skipped, review: !!review } });
     log.info({ event: "import.done", practiceId, jobId: batchId, count: stats.created + stats.updated, durationMs: Date.now() - started });
+    if (batch.purpose === "precheck") {
+      // Claims about to be sent: score each one.
+      let atRisk = 0, risky = 0;
+      for (const id of stats.claimIds) {
+        const r = await runCheck(practiceId, id);
+        atRisk += r.atRiskCents;
+        if (r.risk >= 0.2) risky++;
+      }
+      await withPractice(practiceId, (tx) => tx.importBatch.update({ where: { id: batchId }, data: { atRiskCents: atRisk, riskyClaims: risky, checkedClaimIds: stats.claimIds, status: "done", finishedAt: new Date() } }));
+    } else {
+      // Re-check claims with open findings (a resubmitted 837 may carry the fix) and credit protected money.
+      await afterImport(practiceId, stats.claimIds, batchId);
+    }
     await enqueuePoolSync(practiceId);
   } catch (e) {
     const code = e instanceof X12Error || e instanceof ImportError ? "unreadable_file" : "processing_error";
@@ -206,12 +224,14 @@ export async function reviewDetail(ctx: Actor, reviewId: string) {
 
 /** A person confirmed (and possibly corrected) an extracted EOB: merge it like any other remittance. */
 export async function acceptReview(ctx: Actor, reviewId: string, corrected: NormalizedClaim): Promise<void> {
+  let touched: string[] = [];
   const keys = await keysFor(ctx.practiceId);
   const practice = await prisma().practice.findUniqueOrThrow({ where: { id: ctx.practiceId }, select: { isSynthetic: true } });
   await withPractice(ctx.practiceId, async (tx) => {
     const item = await tx.reviewItem.findUniqueOrThrow({ where: { id: reviewId } });
     if (item.status !== "open") throw new ImportError("This item was already reviewed.");
     const s = await mergeClaims(tx, keys, [{ ...corrected, source: "eob_pdf" }], { batchId: item.batchId, isSynthetic: practice.isSynthetic });
+    touched = s.claimIds;
     await tx.reviewItem.update({ where: { id: reviewId }, data: { status: "accepted", resolvedBy: ctx.userId, resolvedAt: new Date() } });
     const open = await tx.reviewItem.count({ where: { batchId: item.batchId, status: "open" } });
     await tx.importBatch.update({
@@ -222,6 +242,7 @@ export async function acceptReview(ctx: Actor, reviewId: string, corrected: Norm
   });
   await audit({ action: "phi.edit", actorUserId: ctx.userId, actorEmail: ctx.email, practiceId: ctx.practiceId,
     resourceType: "review_item", resourceId: reviewId, details: { outcome: "accepted" } });
+  await afterImport(ctx.practiceId, touched);
   await enqueuePoolSync(ctx.practiceId);
 }
 

@@ -28,6 +28,8 @@ export interface MergeStats {
   paidCents: number;
   recoveredCents: number;
   problems: ParseProblem[];
+  /** Every claim created or updated, for follow-up (pre-submission re-checks, protected credit). */
+  claimIds: string[];
 }
 
 const DAY = 86_400_000;
@@ -132,16 +134,16 @@ async function findClaim(tx: TenantTx, keys: PracticeKeys, c: NormalizedClaim, p
   return matches.length === 1 ? matches[0] : null; // ambiguous → treat as new rather than guess
 }
 
-function statusOf(c: NormalizedClaim): "submitted" | "paid" | "partially_paid" | "denied" {
+function statusOf(c: NormalizedClaim): "draft" | "submitted" | "paid" | "partially_paid" | "denied" {
   return c.status ?? "submitted";
 }
 
 /** Merge one parsed file into the practice. Runs inside the caller's withPractice transaction. */
 export async function mergeClaims(
   tx: TenantTx, keys: PracticeKeys, claims: NormalizedClaim[],
-  opts: { batchId?: string; isSynthetic: boolean; now?: Date },
+  opts: { batchId?: string; isSynthetic: boolean; now?: Date; /** claims about to be sent (pre-submission check) */ asDraft?: boolean },
 ): Promise<MergeStats> {
-  const stats: MergeStats = { created: 0, updated: 0, skipped: 0, deniedCents: 0, paidCents: 0, recoveredCents: 0, problems: [] };
+  const stats: MergeStats = { created: 0, updated: 0, skipped: 0, deniedCents: 0, paidCents: 0, recoveredCents: 0, problems: [], claimIds: [] };
   const results: ResultInput[] = [];
 
   for (const c of claims) {
@@ -165,12 +167,13 @@ export async function mergeClaims(
           claimNumberEnc: c.claimNumber ? keys.encrypt("claims", "claim_number", id, c.claimNumber) : null,
           claimKey: c.claimNumber ? keys.lookupIndex("claim", c.claimNumber) : null,
           serviceDate: toDate(c.serviceDate)!, submittedAt: toDate(c.submittedAt) ?? null, adjudicatedAt: toDate(c.adjudicatedAt) ?? null,
-          status: statusOf(c), billedCents: totals.billed, paidCents: totals.paid,
+          status: opts.asDraft ? "draft" : statusOf(c), billedCents: totals.billed, paidCents: totals.paid,
           attachments: c.attachments ?? [], sources: [c.source], isSynthetic: opts.isSynthetic,
         },
       });
       await writeLines(tx, id, c, toDate(c.adjudicatedAt ?? c.serviceDate)!);
       stats.created++;
+      stats.claimIds.push(id);
       continue;
     }
 
@@ -183,12 +186,17 @@ export async function mergeClaims(
       data.claimKey = keys.lookupIndex("claim", c.claimNumber);
       data.claimNumberEnc = keys.encrypt("claims", "claim_number", existing.id, c.claimNumber);
     }
-    if (c.planType && c.planType !== "UNKNOWN" && (existing.planType === "UNKNOWN" || c.source === "claim837")) data.planType = c.planType;
+    if (c.planType && c.planType !== "UNKNOWN" && (existing.planType === "UNKNOWN" || c.source === "claim837" || c.source === "precheck")) data.planType = c.planType;
     if (c.submittedAt && !existing.submittedAt) data.submittedAt = toDate(c.submittedAt);
 
     const remittance = c.source === "era835" || c.source === "eob_pdf";
-    if (c.source === "claim837") {
+    if (c.source === "claim837" || c.source === "precheck") {
       data.attachments = mergeAttachments(existing.attachments, c.attachments);
+      // A claim checked before sending becomes "submitted" when the sent 837 arrives.
+      if (existing.status === "draft" && !opts.asDraft && c.source === "claim837") {
+        data.status = "submitted";
+        if (!existing.submittedAt) data.submittedAt = opts.now ?? new Date();
+      }
       if (totals.billed) data.billedCents = totals.billed;
       const hasPayment = existing.sources.includes("era835") || existing.sources.includes("eob_pdf");
       if (!hasPayment && c.lines.length) {
@@ -250,6 +258,7 @@ export async function mergeClaims(
     }
     await tx.claim.update({ where: { id: existing.id }, data });
     stats.updated++;
+    stats.claimIds.push(existing.id);
   }
   await recordResults(tx, results);
   return stats;

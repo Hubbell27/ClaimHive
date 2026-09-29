@@ -398,6 +398,46 @@ D4341 87% of the time without a periodontal chart, vs 3% with one."
   accept, their records carry none of the new fields (`extended = false`,
   validated in `assertSafeHarbor`).
 
+## Pre-submission claim check (Phase 5)
+
+`src/lib/precheck/`. Claims come in two ways: the quick form (`entry.ts`) or an
+837D uploaded with purpose `precheck` (`pipeline.ts`). Both go through the
+normal merge with `asDraft`, so the claim is stored as a **draft** and uses the
+same patient matching and encryption as any import. Drafts are left out of the
+money figures and the pool. A draft becomes `submitted` when the biller clicks
+"Mark as sent", or when an ordinary 837 with the same claim arrives.
+
+**Scoring** (`check.ts`, `runCheck`), per procedure line:
+
+- **Basic checks** (`basic.ts`, every practice): a missing tooth or surface, a
+  duplicate of the same procedure and date, typical frequency limits counted
+  from the practice's own history, and the 12-month filing deadline (a warning
+  after 300 days). Their probabilities are rough and labelled "typical".
+- **Pooled rules** (practices that share only): every Phase 4 rule for the
+  insurer that matches the claim, at its measured rate. A pooled frequency rule
+  replaces the typical-limit guess for the same line.
+- **When nothing matches**, the line gets the insurer's usual denial rate for
+  that code. If the claim is on the safe side of a rule (for example, the chart
+  is attached), that rule's safe-side rate is used instead. With several rules,
+  the lowest rate wins: a looser rule's safe side still includes claims that
+  break the stricter one.
+- The line's risk is `1 − Π(1 − p)` over its findings; the claim's risk
+  combines its lines the same way. **At risk** = Σ fee × line risk (the
+  expected loss if it's sent as is).
+
+**Findings** (`check_findings`, RLS like every tenant table) hold one row per
+problem, even when it affects several lines. Re-running the check never
+re-opens a finding that was fixed or dismissed. An open finding whose problem is
+gone becomes `fixed_detected`; if its pooled rule was retired in a rebuild, it
+is closed as `dismissed` instead, so it doesn't count as a fix. Ticking a fix
+(`markFixed`) writes it to the claim (the attachment, or the tooth and
+surfaces) and re-scores. After every ordinary import, `afterImport` re-checks
+the claims that have open findings. When a claim with an attachment, code or
+data fix is paid, the paid amount on those procedures goes to the results ledger
+as `protected` (`attachment_added_before_sending` / `code_fixed_before_sending`,
+attributed, never billed). Draft results pages are re-scored on every view,
+because rules are rebuilt as the pool grows.
+
 ## Reference codes
 
 `src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
@@ -426,10 +466,12 @@ and need a license before production use.
 | Rule bar (Phase 4) | Strict: ≥30 from ≥5 practices per side, gap ≥15 points at the lower 95% bound | Fewer, solid rules; false alarms cost trust |
 | Appeal-fix data (Phase 4) | New shared fields, re-ask consent | Real evidence for what wins; consent stays explicit |
 | Frequency (Phase 4) | Share a 1/2/3+ bucket only | Detects frequency limits without sharing dates |
+| Pre-send entry (Phase 5) | Quick form and an 837D upload before sending | The form suits one claim; the 837 checks a whole day's batch |
+| Non-sharers (Phase 5) | Basic checks only | Pooled rules stay a reason to share; everyone still gets real value |
+| Fix tracking (Phase 5) | The biller's tick plus auto-detection from the sent 837 | Instant feedback, and fixes made in the practice's own software still count |
 | AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
 
 ## Not yet built (by phase)
 
-5. Pre-submission claim
-check. 6. Appeal generator. 7. Recovery tracking and billing. 8. Pilot
+6. Appeal generator. 7. Recovery tracking and billing. 8. Pilot
 readiness (AWS under a BAA, KMS, the pilot checklist in the README).

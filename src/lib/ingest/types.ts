@@ -9,8 +9,8 @@
 import type { Attachment } from "../reference/codes";
 
 export type PlanType = "PPO" | "DHMO" | "INDEMNITY" | "MEDICAID" | "MEDICARE_ADVANTAGE" | "UNKNOWN";
-export type ClaimStatus = "submitted" | "paid" | "partially_paid" | "denied";
-export type SourceKind = "aging" | "era835" | "claim837" | "eob_pdf";
+export type ClaimStatus = "draft" | "submitted" | "paid" | "partially_paid" | "denied";
+export type SourceKind = "aging" | "era835" | "claim837" | "eob_pdf" | "precheck";
 
 export interface NormalizedDenial {
   groupCode: string; // CO, PR, OA, PI

@@ -5,7 +5,7 @@ ClaimHive learns from pooled, de-identified denial data across practices,
 catches likely denials before a claim is submitted, drafts appeals for staff to
 review, and is paid on a contingency of money recovered.
 
-> **Development status:** Phase 4 (denial intelligence engine). **Synthetic data
+> **Development status:** Phase 5 (pre-submission claim check). **Synthetic data
 > only.** No real patient data exists in, or may be loaded into, any development
 > or test environment.
 
@@ -42,6 +42,15 @@ review, and is paid on a contingency of money recovered.
 - **Which appeal fixes win:** for example, "Appeals that sent the missing periodontal chart won 60% vs 14% without"
 - **On your own claims:** denied claims show the likely cause and the winning fix; the claim page records what each appeal included, and recoveries made with ClaimHive's suggested fix are credited to ClaimHive
 - **Consent update:** practices already sharing are asked once before appeal details and 1/2/3+ frequency buckets are shared
+
+## What Phase 5 adds
+
+- **Check a claim before sending** (Check a claim): type in one claim, or upload the 837D file you're about to send. ClaimHive never sends claims
+- **Risk and money at stake:** each claim shows "$421 of $500 at risk", the chance of a denial, and one card per problem with the evidence and the fix
+- **Pooled rules for practices that share**, e.g. "Summit Dental Mutual denies D4341 84% of the time without a periodontal chart, vs 2% with one"
+- **Basic checks for every practice:** missing tooth numbers or surfaces, duplicates, typical frequency limits, and the filing deadline
+- **Fixes are tracked two ways:** the biller ticks "I've attached the perio chart" (the risk is recalculated at once), or ClaimHive notices when the 837 that was actually sent carries the fix
+- **Protected money:** when a fixed claim is paid, the paid amount shows on Results as "protected" (shown, never billed)
 
 ## Quick start (local, synthetic data)
 
@@ -94,7 +103,7 @@ SMOKE_EMAIL=owner@demo.claimhive.test SMOKE_PASSWORD='<temp password>' npm run s
 ```
 
 The smoke test signs in and enrolls MFA, so each demo login can be used for one
-smoke run. Add `SMOKE_INTEL=1` to check rules, rule matches on denied claims and recording an appeal. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
+smoke run (re-running `npm run seed:synthetic` resets them). Add `SMOKE_PRECHECK=1` (with `SMOKE_POOL=yes` on a fresh seed and the worker running) to check a claim by hand, tick the fix and check an 837D before sending. Add `SMOKE_INTEL=1` to check rules, rule matches on denied claims and recording an appeal. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
 confirm the mapping, clear the review queue and download the monthly PDF, with
 the worker running (`npm run worker`).
 

@@ -17,7 +17,7 @@ export async function moneySummary(practiceId: string, now = new Date()) {
   const windowStart = new Date(now.getTime() - 180 * DAY);
   return withPractice(practiceId, async (tx) => {
     const claims = await tx.claim.findMany({
-      where: { serviceDate: { gte: since } },
+      where: { serviceDate: { gte: since }, status: { not: "draft" } }, // drafts haven't been sent yet
       select: { status: true, billedCents: true, paidCents: true, appealStatus: true, recoveredCents: true,
         adjudicatedAt: true, payer: { select: { name: true } }, denials: { select: { amountCents: true, carc: true } } },
     });

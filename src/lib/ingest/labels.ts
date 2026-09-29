@@ -1,6 +1,6 @@
 /** Plain-English labels for import kinds, statuses and problem codes. */
 export const KIND_LABEL: Record<string, string> = {
-  aging: "Aging report", era835: "835 remittance", claim837: "837D claims", eob_pdf: "EOB PDF", synthetic: "Synthetic data",
+  aging: "Aging report", era835: "835 remittance", claim837: "837D claims", eob_pdf: "EOB PDF", synthetic: "Synthetic data", precheck: "Entered for a check",
 };
 export const STATUS_LABEL: Record<string, { text: string; tone: string }> = {
   mapping_needed: { text: "Choose columns", tone: "bg-amber-100 text-amber-900" },

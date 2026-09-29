@@ -16,7 +16,8 @@ export async function uploadImportAction(_prev: FormState, form: FormData): Prom
   if (!(file instanceof File) || !file.size) return { error: "Choose a file to import." };
   let batchId: string;
   try {
-    ({ batchId } = await createImport(ctx, file.name, new Uint8Array(await file.arrayBuffer())));
+    const purpose = form.get("purpose") === "precheck" ? "precheck" : "record";
+    ({ batchId } = await createImport(ctx, file.name, new Uint8Array(await file.arrayBuffer()), { purpose }));
   } catch (e) {
     if (e instanceof ImportError) return { error: e.message };
     log.error({ event: "import.upload_failed", practiceId: ctx.practiceId }, e);

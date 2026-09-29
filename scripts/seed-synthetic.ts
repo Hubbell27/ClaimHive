@@ -28,12 +28,15 @@ for (const [role, email] of [["owner", "owner@demo.claimhive.test"], ["biller", 
   const user = await prisma().user.upsert({
     where: { email },
     create: { email, name: role === "owner" ? "Demo Owner" : "Demo Biller", passwordHash: await hashPassword(temp) },
-    update: { passwordHash: await hashPassword(temp), mustChangePassword: true },
+    // Re-seeding fully resets the demo logins (password and MFA enrolment).
+    update: { passwordHash: await hashPassword(temp), mustChangePassword: true, totpEnabled: false, totpSecretEnc: null, totpLastStep: null, failedLogins: 0, lockedUntil: null },
   });
   await prisma().membership.upsert({
     where: { userId_practiceId: { userId: user.id, practiceId: first.id } },
     create: { userId: user.id, practiceId: first.id, role }, update: { role },
   });
+  // Re-seeding: the demo logins only see the newest demo practice.
+  await prisma().membership.deleteMany({ where: { userId: user.id, practiceId: { not: first.id } } });
   console.log(`${role}: ${email}  temporary password: ${temp}  (practice: ${first.name})`);
 }
 process.exit(0);

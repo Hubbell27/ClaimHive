@@ -237,6 +237,10 @@ model Claim {
   appealSentAt    DateTime?    @map("appeal_sent_at") @db.Date
   // The ClaimHive rule whose suggested fix the office used for this appeal (tenant-only; for attribution).
   appealRuleKey   String?      @map("appeal_rule_key")
+  // Pre-submission check (Phase 5): the latest score, kept on the claim for lists.
+  precheckedAt    DateTime?    @map("prechecked_at") @db.Timestamptz
+  riskScore       Float?       @map("risk_score")      // chance at least one line is denied (0..1)
+  atRiskCents     Int?         @map("at_risk_cents")   // expected dollars lost if sent as is
   isSynthetic     Boolean      @default(false) @map("is_synthetic")
   // Random id of this claim's de-identified copy in the pool (only this tenant row links them).
   poolRecordId    String?      @map("pool_record_id") @db.Uuid
@@ -248,6 +252,7 @@ model Claim {
   denials         Denial[]
   results         ResultEvent[]
   reviewItems     ReviewItem[]
+  findings        CheckFinding[]
 
   @@index([practiceId, claimKey])
   @@index([practiceId, updatedAt])
@@ -306,6 +311,12 @@ model ImportBatch {
   // Column mapping (aging reports): target field -> source header. Headers only, no PHI.
   mapping       Json?
   detectedSystem String?     @map("detected_system")
+  // "record" = files describing what already happened; "precheck" = claims about to be sent.
+  purpose       String       @default("record")
+  atRiskCents   Int          @default(0) @map("at_risk_cents")
+  riskyClaims   Int          @default(0) @map("risky_claims")
+  // Pre-send batches: which claims were checked (ids only), for the batch's results table.
+  checkedClaimIds String[]   @default([]) @map("checked_claim_ids") @db.Uuid
   rowsTotal     Int          @default(0) @map("rows_total")
   claimsCreated Int          @default(0) @map("claims_created")
   claimsUpdated Int          @default(0) @map("claims_updated")
@@ -387,4 +398,42 @@ model ResultEvent {
   @@unique([claimId, kind, method])
   @@index([practiceId, occurredAt])
   @@map("result_events")
+}
+
+// ---------------------------------------------------------------- pre-submission check (PHI-free text; RLS)
+
+enum FindingStatus {
+  open
+  fixed_by_user    // the biller ticked "fixed"
+  fixed_detected   // a later 837/835 showed the fix (e.g. the attachment was sent)
+  dismissed        // the biller said it doesn't apply
+}
+
+// One thing the pre-submission check found on a claim, with the fix and the money at stake.
+model CheckFinding {
+  id           String        @id @default(uuid()) @db.Uuid
+  practiceId   String        @map("practice_id") @db.Uuid
+  claimId      String        @map("claim_id") @db.Uuid
+  // pool_rule | missing_tooth | missing_surface | duplicate | timely_filing | frequency
+  kind         String
+  source       String        // "pool" (needs sharing) or "basic"
+  ruleKey      String?       @map("rule_key")
+  cdtCode      String        @map("cdt_code") @db.VarChar(5)
+  // attachment | code | data | verify
+  fixType      String        @map("fix_type")
+  attachment   String?
+  title        String
+  detail       String        // plain English, with the evidence
+  fix          String
+  probability  Float
+  atRiskCents  Int           @map("at_risk_cents")
+  status       FindingStatus @default(open)
+  fixedAt      DateTime?     @map("fixed_at") @db.Timestamptz
+  fixedBy      String?       @map("fixed_by") @db.Uuid
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  claim        Claim         @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId, claimId])
+  @@index([practiceId, status])
+  @@map("check_findings")
 }

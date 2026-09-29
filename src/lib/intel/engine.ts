@@ -176,7 +176,7 @@ async function usuallyDenied(synthetic: boolean): Promise<Candidate[]> {
 }
 
 const FIX: Record<RuleKind, (c: Candidate) => { sql: string; label: string }> = {
-  missing_attachment: (c) => ({ sql: `${q(c.condition.attachment!)} = ANY(appeal_attachments)`, label: `sent the missing ${c.condition.attachment}` }),
+  missing_attachment: (c) => ({ sql: `${q(c.condition.attachment!)} = ANY(appeal_attachments)`, label: `sent the missing ${c.condition.attachment!.replaceAll("_", " ")}` }),
   billed_with: () => ({ sql: `appeal_argument = 'coding_correction'`, label: "argued the coding (documented the separate service)" }),
   frequency: () => ({ sql: `appeal_argument = 'frequency_exception'`, label: "asked for a frequency exception with clinical notes" }),
   usually_denied: () => ({ sql: `appeal_argument = 'coverage_dispute'`, label: "disputed the coverage decision" }),
