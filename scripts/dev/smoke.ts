@@ -3,6 +3,7 @@
  * forced password change -> choose practice -> dashboard, patients, audit, export.
  * Usage: SMOKE_EMAIL=... SMOKE_PASSWORD=... npx tsx scripts/dev/smoke.ts
  */
+import "dotenv/config";
 import { chromium } from "playwright";
 import { codeAt, currentStep } from "../../src/lib/auth/totp";
 
@@ -28,6 +29,11 @@ async function main() {
   await page.fill("input[name=confirm]", newPw);
   await page.click("form button");
   await page.waitForURL(/\/(choose-practice|app)$/);
+  if (process.env.SMOKE_ADMIN && process.env.SMOKE_BILLING) {
+    await adminBillingFlow(page);
+    await browser.close();
+    return;
+  }
   if (process.env.SMOKE_ADMIN) {
     const a = await page.goto(`${base}/admin`);
     if (process.env.SMOKE_SHOTS) await page.screenshot({ path: `${process.env.SMOKE_SHOTS}/admin.png`, fullPage: true });
@@ -50,6 +56,11 @@ async function main() {
     if (process.env.SMOKE_SHOTS) await page.screenshot({ path: `${process.env.SMOKE_SHOTS}/onboarding.png`, fullPage: true });
     await page.click(`button[value=${process.env.SMOKE_POOL === "no" ? "no" : "yes"}]`);
     await page.waitForURL("**/app");
+  }
+  if (process.env.SMOKE_BILLING) {
+    await practiceBillingFlow(page);
+    await browser.close();
+    return;
   }
   if (process.env.SMOKE_APPEALS) {
     await appealsFlow(page);
@@ -302,6 +313,47 @@ async function appealsFlow(page: import("playwright").Page) {
   await page.goto(`${base}/app/appeals`);
   console.log("appeals →", (await text()).slice(0, 500));
   if (shots) await page.screenshot({ path: `${shots}/appeals.png`, fullPage: false });
+}
+
+/** Phase 7 (staff): build last month's drafts, review the demo practice's draft, issue it, export for QuickBooks. */
+async function adminBillingFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  const { prisma } = await import("../../src/lib/db");
+  const demo = await prisma().membership.findFirstOrThrow({ where: { user: { email: "owner@demo.claimhive.test" } }, select: { practiceId: true } });
+  await page.goto(`${base}/admin/billing`);
+  await page.getByRole("button", { name: "Build or refresh drafts" }).click();
+  await page.waitForURL(/msg=/);
+  console.log("drafts →", (await text()).slice(0, 400));
+  if (shots) await page.screenshot({ path: `${shots}/admin-billing.png`, fullPage: false });
+  await page.locator(`a[href^="/admin/billing/${demo.practiceId}/"]`).first().click();
+  await page.waitForURL(/\/admin\/billing\/[0-9a-f-]{36}\/[0-9a-f-]{36}/);
+  console.log("draft →", (await text()).slice(0, 500));
+  if (shots) await page.screenshot({ path: `${shots}/admin-draft.png`, fullPage: false });
+  await page.getByRole("button", { name: "Issue statement" }).click();
+  await page.waitForURL(/msg=/);
+  console.log("issued →", (await text()).slice(0, 200));
+  const month = new URL(page.url()).pathname && (await page.locator('a[href^="/admin/billing?month="]').first().getAttribute("href"))!.split("=")[1];
+  const qbo = await page.request.get(`${base}/api/admin/billing/quickbooks?month=${month}`);
+  const body = await qbo.text();
+  console.log("quickbooks", qbo.status(), body.split("\r\n").filter(Boolean).length - 1, "rows;", body.split("\r\n")[0]);
+}
+
+/** Phase 7 (practice): see the rate, the accruing estimate and the issued statement; download it. */
+async function practiceBillingFlow(page: import("playwright").Page) {
+  const shots = process.env.SMOKE_SHOTS;
+  const text = async () => (await page.locator("main").innerText()).replace(/\s+/g, " ");
+  await page.goto(`${base}/app/billing`);
+  console.log("billing →", (await text()).slice(0, 600));
+  if (shots) await page.screenshot({ path: `${shots}/billing.png`, fullPage: true });
+  const link = page.locator('a[href^="/app/billing/"]').first();
+  if (!(await link.count())) throw new Error("no issued statement for the demo practice");
+  await link.click();
+  await page.waitForURL(/\/app\/billing\/[0-9a-f-]{36}$/);
+  if (shots) await page.screenshot({ path: `${shots}/statement.png`, fullPage: false });
+  const pdf = await page.request.get(page.url().replace("/app/billing/", "/api/billing/statements/") + "?format=pdf");
+  console.log("statement pdf", pdf.status(), (await pdf.body()).length, "bytes");
+  if (shots) (await import("node:fs")).writeFileSync(`${shots}/statement.pdf`, await pdf.body());
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

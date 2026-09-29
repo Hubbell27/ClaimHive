@@ -70,6 +70,7 @@ enum ReviewStatus {
 enum ResultKind {
   recovered // money won back after a denial (cash received)
   protected // a claim fixed before sending that was then paid (shown, never billed)
+  reversed // the insurer took back money recorded as recovered (Phase 7; credited if it was billed)
 }
 
 // ---------------------------------------------------------------- identity
@@ -129,6 +130,7 @@ model Practice {
   signerName     String?      @map("signer_name")
   signerTitle    String?      @map("signer_title")
   memberships    Membership[]
+  billingRates   BillingRate[]
 
   @@map("practices")
 }
@@ -410,7 +412,12 @@ model ResultEvent {
   claim        Claim        @relation(fields: [claimId], references: [id], onDelete: Cascade)
   sourceBatch  ImportBatch? @relation(fields: [sourceBatchId], references: [id], onDelete: SetNull)
 
-  @@unique([claimId, kind, method])
+  // Distinguishes repeat events on one claim (a second partial payment, a later reversal):
+  // the paid total after the event, e.g. "paid:40000". "" for one-off events.
+  seqKey        String       @default("") @map("seq_key")
+  statementLines StatementLine[]
+
+  @@unique([claimId, kind, method, seqKey])
   @@index([practiceId, occurredAt])
   @@map("result_events")
 }
@@ -498,4 +505,77 @@ model AppealLetter {
   @@index([practiceId, claimId])
   @@index([practiceId, status])
   @@map("appeal_letters")
+}
+
+// ---------------------------------------------------------------- billing (Phase 7; PHI-free)
+
+// Contingency rate history, append-only. practice_id NULL = ClaimHive's default rate.
+// A recovery is billed at the rate in force on the date the money was recovered.
+model BillingRate {
+  id            String    @id @default(uuid()) @db.Uuid
+  practiceId    String?   @map("practice_id") @db.Uuid
+  rateBps       Int       @map("rate_bps") // basis points: 2000 = 20%
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  note          String?
+  setBy         String    @map("set_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  practice      Practice? @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId, effectiveFrom])
+  @@map("billing_rates")
+}
+
+enum StatementStatus {
+  draft // built automatically; ClaimHive staff review it (the practice can't see it)
+  issued // locked; the practice sees it and can download it
+}
+
+model Statement {
+  id            String          @id @default(uuid()) @db.Uuid
+  practiceId    String          @map("practice_id") @db.Uuid
+  number        String?         @unique // assigned when issued, e.g. CH-202609-00012
+  periodStart   DateTime        @map("period_start") @db.Date
+  periodEnd     DateTime        @map("period_end") @db.Date // exclusive
+  status        StatementStatus @default(draft)
+  recoveredCents Int            @default(0) @map("recovered_cents") // billed recoveries on this statement
+  feeCents      Int             @default(0) @map("fee_cents")
+  creditCents   Int             @default(0) @map("credit_cents")
+  totalCents    Int             @default(0) @map("total_cents") // fee - credit (negative = credit balance)
+  issuedAt      DateTime?       @map("issued_at") @db.Timestamptz
+  issuedBy      String?         @map("issued_by") @db.Uuid
+  dueDate       DateTime?       @map("due_date") @db.Date
+  isSynthetic   Boolean         @default(false) @map("is_synthetic")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  lines         StatementLine[]
+
+  @@unique([practiceId, periodStart])
+  @@index([status, periodStart])
+  @@map("statements")
+}
+
+// One billed recovery (charge) or one reversal of a billed recovery (credit).
+// Each ledger event is billed at most once, ever.
+model StatementLine {
+  id             String      @id @default(uuid()) @db.Uuid
+  practiceId     String      @map("practice_id") @db.Uuid
+  statementId    String      @map("statement_id") @db.Uuid
+  kind           String // "charge" | "credit"
+  resultEventId  String      @unique @map("result_event_id") @db.Uuid
+  recoveredCents Int         @map("recovered_cents") // the money the fee is on
+  rateBps        Int         @map("rate_bps")
+  feeCents       Int         @map("fee_cents") // always positive; credits are subtracted
+  occurredAt     DateTime    @map("occurred_at") @db.Date
+  claimRef       String      @map("claim_ref") // ClaimHive's own claim reference, not a patient detail
+  claimId        String      @map("claim_id") @db.Uuid
+  payer          String
+  cdtCodes       String[]    @default([]) @map("cdt_codes")
+  method         String
+  explanation    String // PHI-free: how the money was won (or taken back)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  statement      Statement   @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  resultEvent    ResultEvent @relation(fields: [resultEventId], references: [id])
+
+  @@index([practiceId, statementId])
+  @@map("statement_lines")
 }

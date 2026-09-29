@@ -17,6 +17,10 @@ const patientsPerPractice = Number(process.argv[3] ?? 450);
 const r = await loadSyntheticDataset({ practices, patientsPerPractice, seed: 2026 });
 console.log(`Loaded ${r.practices.length} practices, ${r.patients} patients, ${r.claims} claims, ${r.denials} denials.`);
 const first = r.practices[0];
+// A development default contingency rate (ClaimHive staff set real rates in the admin console).
+if (!(await prisma().billingRate.count({ where: { practiceId: null } }))) {
+  await prisma().billingRate.create({ data: { rateBps: 2000, effectiveFrom: new Date("2020-01-01T00:00:00Z"), note: "development default", setBy: "00000000-0000-0000-0000-000000000000" } });
+}
 // A made-up letterhead for the demo practice so appeal letters can be approved (555 numbers; valid-format NPI).
 await prisma().practice.update({ where: { id: first.id }, data: {
   addressLine1: "100 Example Street", city: "Example City", zip: "00000", phone: "555-010-0100",

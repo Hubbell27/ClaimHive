@@ -25,6 +25,7 @@ export const METHODS = {
   attachment_added_before_sending: "Attachment added before sending",
   code_fixed_before_sending: "Coding fixed before sending",
   paid_after_denial: "Paid after your team resubmitted",
+  insurer_reversal: "Taken back by the insurer",
 } as const;
 export type Method = keyof typeof METHODS;
 
@@ -63,6 +64,8 @@ export function explain(method: Method, e: Evidence): string {
       return `ClaimHive flagged the missing ${att}${codes} before the claim was sent. ${payer} usually denies it without one, and this time paid.`;
     case "code_fixed_before_sending":
       return `ClaimHive flagged a coding problem${codes} before the claim was sent, and ${payer} paid.`;
+    case "insurer_reversal":
+      return `${payer} took back money it had paid${codes} after a denial (a reversal on its 835).`;
     case "paid_after_denial":
       return `${payer} paid${codes} after an earlier denial${reason(e.carc, e.rarc)}, once your team resubmitted or appealed it.`;
   }
@@ -71,11 +74,12 @@ export function explain(method: Method, e: Evidence): string {
 export interface ResultInput {
   practiceId: string;
   claimId: string;
-  kind: "recovered" | "protected";
+  kind: "recovered" | "protected" | "reversed";
   amountCents: number;
   attributed: boolean;
   method: Method;
   evidence: Evidence;
+  seqKey?: string; // see ResultEvent.seqKey
   occurredAt: Date;
   sourceBatchId?: string;
   isSynthetic?: boolean;
@@ -88,7 +92,7 @@ export async function recordResults(tx: TenantTx, rows: ResultInput[]): Promise<
     data: rows.filter((x) => x.amountCents > 0).map((x) => ({
       practiceId: x.practiceId, claimId: x.claimId, kind: x.kind, amountCents: x.amountCents, attributed: x.attributed,
       method: x.method, explanation: explain(x.method, x.evidence), evidence: x.evidence as Prisma.InputJsonValue,
-      occurredAt: x.occurredAt, sourceBatchId: x.sourceBatchId ?? null, isSynthetic: x.isSynthetic ?? false,
+      occurredAt: x.occurredAt, sourceBatchId: x.sourceBatchId ?? null, isSynthetic: x.isSynthetic ?? false, seqKey: x.seqKey ?? "",
     })),
     skipDuplicates: true,
   });
@@ -107,7 +111,7 @@ export function isClaimHiveAttributed(_link: { flaggedFixApplied?: boolean; clai
 export interface ResultRow {
   id: string;
   claimRef: string;
-  kind: "recovered" | "protected";
+  kind: "recovered" | "protected" | "reversed";
   amountCents: number;
   attributed: boolean;
   method: Method;
@@ -129,7 +133,9 @@ export interface ResultsSummary {
   protectedCount: number;
   outsideCents: number; // recovered by the office without ClaimHive: shown, not billed
   outsideCount: number;
-  byMethod: { method: Method; label: string; kind: "recovered" | "protected"; cents: number; count: number }[];
+  reversedCents: number; // taken back by insurers (already subtracted from recovered / outside)
+  reversedCount: number;
+  byMethod: { method: Method; label: string; kind: "recovered" | "protected" | "reversed"; cents: number; count: number }[];
   byPayer: { payer: string; cents: number; count: number }[];
   rows: ResultRow[];
   anySynthetic: boolean;
@@ -145,7 +151,7 @@ export async function resultsSummary(practiceId: string, from: Date, to: Date): 
   const s: ResultsSummary = {
     from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
     recoveredCents: 0, recoveredCount: 0, protectedCents: 0, protectedCount: 0, outsideCents: 0, outsideCount: 0,
-    byMethod: [], byPayer: [], rows: [], anySynthetic: false,
+    reversedCents: 0, reversedCount: 0, byMethod: [], byPayer: [], rows: [], anySynthetic: false,
   };
   const methods = new Map<string, ResultsSummary["byMethod"][number]>();
   const payers = new Map<string, ResultsSummary["byPayer"][number]>();
@@ -153,10 +159,13 @@ export async function resultsSummary(practiceId: string, from: Date, to: Date): 
     const ev = e.evidence as Evidence;
     const method = e.method as Method;
     s.anySynthetic ||= e.isSynthetic;
-    if (e.kind === "recovered" && !e.attributed) { s.outsideCents += e.amountCents; s.outsideCount++; }
+    if (e.kind === "reversed") {
+      s.reversedCents += e.amountCents; s.reversedCount++;
+      if (e.attributed) s.recoveredCents -= e.amountCents; else s.outsideCents -= e.amountCents;
+    } else if (e.kind === "recovered" && !e.attributed) { s.outsideCents += e.amountCents; s.outsideCount++; }
     else if (e.kind === "recovered") { s.recoveredCents += e.amountCents; s.recoveredCount++; }
     else { s.protectedCents += e.amountCents; s.protectedCount++; }
-    if (e.kind === "protected" || e.attributed) {
+    if (e.kind !== "reversed" && (e.kind === "protected" || e.attributed)) {
       const k = `${e.kind}|${method}`;
       const m = methods.get(k) ?? { method, label: METHODS[method] ?? method, kind: e.kind, cents: 0, count: 0 };
       m.cents += e.amountCents; m.count++; methods.set(k, m);

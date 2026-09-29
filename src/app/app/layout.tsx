@@ -22,6 +22,7 @@ export default async function PracticeLayout({ children }: { children: React.Rea
         <span className="font-bold text-brand">ClaimHive</span>
         <Link href="/app" className="font-medium">Money</Link>
         <Link href="/app/results" className="font-medium">Results</Link>
+        <Link href="/app/billing" className="font-medium">Billing</Link>
         <Link href="/app/check" className="font-medium">Check a claim</Link>
         <Link href="/app/claims" className="font-medium">Claims</Link>
         <Link href="/app/appeals" className="font-medium">Appeals</Link>

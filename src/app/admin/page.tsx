@@ -26,6 +26,7 @@ export default async function AdminPage() {
     <div className="min-h-screen">
       <nav className="flex items-center gap-4 border-b bg-white px-5 py-3">
         <span className="font-bold text-brand">ClaimHive admin</span>
+        <Link href="/admin/billing" className="font-medium">Billing</Link>
         <Link href="/choose-practice" className="ml-auto text-sm underline">My practices</Link>
         <form action={logoutAction}><button className="text-sm underline">Sign out</button></form>
       </nav>

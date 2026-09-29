@@ -57,7 +57,7 @@ export default async function ResultsPage({ searchParams }: { searchParams: Prom
       </section>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Tile label="Recovered through ClaimHive" cents={s.recoveredCents} count={s.recoveredCount} note="won back after a denial" tone="text-money-saved" />
+        <Tile label="Recovered through ClaimHive" cents={s.recoveredCents} count={s.recoveredCount} note={s.reversedCents ? `won back after a denial, net of ${usd(s.reversedCents)} insurers took back` : "won back after a denial"} tone="text-money-saved" />
         <Tile label="Protected before sending" cents={s.protectedCents} count={s.protectedCount} note="fixed first, then paid" tone="text-money-saved" />
         <Tile label="Recovered by your team" cents={s.outsideCents} count={s.outsideCount} note="without ClaimHive, not billed" />
       </div>
@@ -97,12 +97,12 @@ export default async function ResultsPage({ searchParams }: { searchParams: Prom
                 <td className="pr-3 pt-2.5 font-mono text-xs">{r.claimRef}</td>
                 <td className="pr-3">{r.payer}</td>
                 <td>
-                  <span className={`mr-2 rounded px-1.5 py-0.5 text-xs font-semibold ${r.kind === "protected" ? "bg-sky-100 text-sky-900" : r.attributed ? "bg-green-100 text-green-900" : "bg-stone-100 text-stone-700"}`}>
-                    {r.kind === "protected" ? "Protected" : r.attributed ? "Recovered" : "Your team"}
+                  <span className={`mr-2 rounded px-1.5 py-0.5 text-xs font-semibold ${r.kind === "reversed" ? "bg-red-100 text-red-900" : r.kind === "protected" ? "bg-sky-100 text-sky-900" : r.attributed ? "bg-green-100 text-green-900" : "bg-stone-100 text-stone-700"}`}>
+                    {r.kind === "reversed" ? "Taken back" : r.kind === "protected" ? "Protected" : r.attributed ? "Recovered" : "Your team"}
                   </span>
                   {r.explanation}
                 </td>
-                <td className="text-right font-semibold">{usd(r.amountCents)}</td>
+                <td className={`text-right font-semibold ${r.kind === "reversed" ? "text-money-lost" : ""}`}>{r.kind === "reversed" ? "-" : ""}{usd(r.amountCents)}</td>
               </tr>
             ))}
           </tbody>

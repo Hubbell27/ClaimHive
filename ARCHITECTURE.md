@@ -468,6 +468,35 @@ A returned letter that uses a placeholder ClaimHive doesn't know fails as `unkno
 - RLS applies as on every tenant table.
 - Audit actions: `appeal.request`, `appeal.draft` (writer, model, request size), `appeal.edit` (version), `appeal.approve` (version, hash), `appeal.download` and `appeal.sent`.
 
+## Recovery tracking and billing (Phase 7)
+
+`src/lib/billing/`. Billing reads only the results ledger (`result_events`), so every billed dollar traces back to one ledger event and its PHI-free explanation.
+
+**The ledger:**
+- `recovered` events come from 835s that pay after a denial. `seq_key` (the paid total after the event) lets a second partial payment on the same claim be its own event. It used to be dropped by the old unique key.
+- A corrected 835 that pays less than a claim's recorded recovery creates `reversed` events. They are split across the claim's recoveries, newest first, each carrying `reversesEventId` and the original's attribution, and `claims.recovered_cents` goes down.
+- Standalone 835 reversal records (CLP02 = 22) are still skipped; the corrected claim that follows them carries the new amount.
+- Results nets reversals out and lists them as "Taken back".
+
+**Rates** (`billing_rates`) are append-only history rows: `practice_id NULL` is the default, otherwise that practice's own rate. `rateOn()` uses the practice's latest row effective by the recovery date, else the latest default. RLS lets a practice read the default and its own rows only. Rows are written by staff: default rows with no practice context, practice rows under that practice's context.
+
+**Statements** (`statements`, `statement_lines`, RLS):
+- `buildDraft` (practice, month) collects every unbilled attributed `recovered` event (a charge) and `reversed` event (a credit) up to the end of the month, including late arrivals from earlier months.
+- Charges use the rate in force on the recovery date; a credit uses the rate its original was billed at.
+- `statement_lines.result_event_id` is unique, so an event is billed once, ever.
+- Rebuilding a draft replaces its lines.
+- `issueStatement` takes the `updated_at` the staff member reviewed (so they issue exactly what they saw), assigns `CH-YYYYMM-NNNNN` from a sequence, and sets payment terms (net 30).
+- Database triggers lock issued statements and their lines against update and delete, and a CHECK keeps `total = fee − credit`.
+- A monthly pg-boss job (`billing.drafts`, 06:11 UTC on the 1st) drafts the month that just ended for every practice. Staff can rebuild any draft from the console.
+
+**Who sees what:**
+- Staff (`/admin/billing`) see rates, drafts, issued statements and exports. There is no PHI: lines hold ClaimHive's claim reference, the insurer, CDT codes and the ledger explanation.
+- Practices (`/app/billing`) see their rate, an "accruing" estimate (the same calculation as a draft, not stored), and issued statements only, with claim references linked to their claims.
+- Exports:
+  - `statementCsv` and `statementPdf`, for practices and staff;
+  - `quickbooksCsv`, all issued statements for one month, for staff, with synthetic practices excluded in real deployments.
+- Audit actions: `billing.rate_set`, `billing.draft_built`, `billing.statement_issued`, `billing.export` and `billing.view`.
+
 ## Reference codes
 
 `src/lib/reference/codes.ts` has subsets of CDT, CARC and RARC with ClaimHive's
@@ -504,9 +533,13 @@ and need a license before production use.
 | Letterhead (Phase 6) | Practice profile in Settings | Entered once by the owner and merged locally, never sent to the AI |
 | Approval (Phase 6) | Any biller or owner, of an exact version | Whoever edits approves; the audit log records who approved which version |
 | Attribution (Phase 6) | Recoveries after a ClaimHive letter count as ClaimHive's | The letter is ClaimHive's work; this can be revisited when billing is set up in Phase 7 |
+| Contingency rate (Phase 7) | Staff default + per-practice overrides, dated history | Pilot discounts without code changes; past recoveries are never re-priced |
+| Statements (Phase 7) | Drafted on the 1st, staff review and issue, then locked | A person checks every invoice before a practice sees it |
+| Clawbacks (Phase 7) | Credit on the next statement at the original rate | Issued statements never change; the correction is visible and traceable |
+| Exports (Phase 7) | PDF + CSV per statement; QuickBooks Online import per month | For the practice's accountant and ClaimHive's books |
 | AI drafting (Phase 6) | De-identified content only to the Anthropic API; patient details merged locally; human review required; nothing sent automatically | Keeps PHI out of third-party processing |
 
 ## Not yet built (by phase)
 
-7. Recovery tracking and billing. 8. Pilot
+8. Pilot
 readiness (AWS under a BAA, KMS, the pilot checklist in the README).

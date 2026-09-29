@@ -79,10 +79,10 @@ export async function buildResultsPdf(practiceName: string, periodLabel: string,
   };
   header();
   for (const r of s.rows) {
-    const tag = r.kind === "protected" ? "[Protected]" : r.attributed ? "[Recovered]" : "[Your team]";
+    const tag = r.kind === "reversed" ? "[Taken back]" : r.kind === "protected" ? "[Protected]" : r.attributed ? "[Recovered]" : "[Your team]";
     const lines = wrap(`${tag} ${r.explanation}`, font, 8, 320);
     if (y - lines.length * 10 - 6 < 60) { page = doc.addPage([612, 792]); y = 740; header(); }
-    text(r.occurredAt, cols.date, font, 8); text(r.claimRef, cols.ref, font, 8); text(usd(r.amountCents), cols.amt, bold, 8);
+    text(r.occurredAt, cols.date, font, 8); text(r.claimRef, cols.ref, font, 8); text(`${r.kind === "reversed" ? "-" : ""}${usd(r.amountCents)}`, cols.amt, bold, 8);
     for (const l of lines) { text(l, cols.how, font, 8); y -= 10; }
     y -= 4;
   }

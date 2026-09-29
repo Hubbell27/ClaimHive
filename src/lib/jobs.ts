@@ -11,6 +11,7 @@ export const QUEUES = {
   poolSync: "pool.sync", // share a practice's new/changed claims with the de-identified pool
   intelRebuild: "intel.rebuild", // recompute denial rules from the pool (after syncs, and nightly)
   appealDraft: "appeal.draft", // write an appeal letter (de-identified request; merged locally)
+  billingDrafts: "billing.drafts", // monthly: draft every practice's statement for the previous month
 } as const;
 
 const g = globalThis as unknown as { boss?: Promise<PgBoss> };

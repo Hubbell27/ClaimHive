@@ -7,6 +7,7 @@ import { audit } from "../lib/audit";
 import { prisma } from "../lib/db";
 import { processBatch, purgeOldFiles } from "../lib/ingest/pipeline";
 import { draftLetter } from "../lib/appeals/letters";
+import { buildAllDrafts, monthKey, monthStart } from "../lib/billing/statements";
 import { boss, QUEUES, type AppealJob, type ImportJob, type IntelJob, type PoolSyncJob, type SyntheticJob } from "../lib/jobs";
 import { syncPractice } from "../lib/pool/sync";
 import { rebuildRules } from "../lib/intel/engine";
@@ -34,6 +35,12 @@ async function main() {
   await b.work<AppealJob>(QUEUES.appealDraft, { batchSize: 1 }, async ([job]) => {
     await draftLetter(job.data.practiceId, job.data.letterId);
   });
+  await b.work(QUEUES.billingDrafts, { batchSize: 1 }, async () => {
+    const lastMonth = monthStart(new Date(Date.now() - 5 * 86_400_000)); // runs on the 1st: the month that just ended
+    const r = await buildAllDrafts(lastMonth);
+    log.info({ event: "job.done", job: QUEUES.billingDrafts, count: r.built, outcome: `${monthKey(lastMonth)} failed=${r.failed.length}` });
+  });
+  await b.schedule(QUEUES.billingDrafts, "11 6 1 * *"); // 06:11 UTC on the 1st; staff review and issue
   await b.work<IntelJob>(QUEUES.intelRebuild, { batchSize: 1 }, async ([job]) => {
     await rebuildRules(job.data?.synthetic ?? false);
   });

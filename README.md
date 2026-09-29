@@ -5,7 +5,7 @@ ClaimHive learns from pooled, de-identified denial data across practices,
 catches likely denials before a claim is submitted, drafts appeals for staff to
 review, and is paid on a contingency of money recovered.
 
-> **Development status:** Phase 6 (appeal letter generator). **Synthetic data
+> **Development status:** Phase 7 (recovery tracking and billing). **Synthetic data
 > only.** No real patient data exists in, or may be loaded into, any development
 > or test environment.
 
@@ -61,6 +61,15 @@ review, and is paid on a contingency of money recovered.
 - **Appeals page:** drafted / sent / won / lost, the amount recovered and the win rate. Wins come from 835 payments; recoveries after a ClaimHive letter are credited to ClaimHive
 - **Letterhead in Settings** (owners): address, phone, NPI, tax ID and signer
 
+## What Phase 7 adds
+
+- **Contingency billing on recovered money only:** cash an insurer paid after a denial, following a ClaimHive fix or appeal letter. Protected money and recoveries the office made on its own are never billed
+- **Rates:** ClaimHive staff set a default rate and optional per-practice rates (e.g. a pilot discount) in the admin console (Billing). Every change is dated and kept, and a recovery is billed at the rate in force the day the money came in
+- **Monthly statements:** drafts are built automatically on the 1st. Staff review and issue them, and issued statements are locked by the database. Practices see their rate, what's accruing this month, and every issued statement (Billing)
+- **Clawbacks:** when a corrected 835 pays less than money ClaimHive recorded as recovered, the reversal is recorded, and the fee on it is credited on the next statement at the original rate
+- **Exports:** PDF invoice and CSV line items for each statement; a QuickBooks Online invoice import file for each month (staff). None contain patient details
+- **Ledger fixes:** a second partial payment on the same claim is now its own recovery (it used to be dropped), and Results shows money taken back
+
 ## Quick start (local, synthetic data)
 
 Requirements: Node 22+ and PostgreSQL 15+.
@@ -112,7 +121,7 @@ SMOKE_EMAIL=owner@demo.claimhive.test SMOKE_PASSWORD='<temp password>' npm run s
 ```
 
 The smoke test signs in and enrolls MFA, so each demo login can be used for one
-smoke run (re-running `npm run seed:synthetic` resets them). Add `SMOKE_APPEALS=1` (worker running) to draft, edit, approve and download an appeal letter and mark it sent. Add `SMOKE_PRECHECK=1` (with `SMOKE_POOL=yes` on a fresh seed and the worker running) to check a claim by hand, tick the fix and check an 837D before sending. Add `SMOKE_INTEL=1` to check rules, rule matches on denied claims and recording an appeal. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
+smoke run (re-running `npm run seed:synthetic` resets them). Add `SMOKE_BILLING=1` to view the practice's Billing page and download a statement, or `SMOKE_ADMIN=1 SMOKE_BILLING=1` with a staff login (`npm run create-admin`) to build, review and issue statements and export for QuickBooks. Add `SMOKE_APPEALS=1` (worker running) to draft, edit, approve and download an appeal letter and mark it sent. Add `SMOKE_PRECHECK=1` (with `SMOKE_POOL=yes` on a fresh seed and the worker running) to check a claim by hand, tick the fix and check an 837D before sending. Add `SMOKE_INTEL=1` to check rules, rule matches on denied claims and recording an appeal. Add `SMOKE_POOL=1` to walk through the consent screen, the Insurer patterns page and opting out. Add `SMOKE_IMPORTS=1` to import every sample file through the UI,
 confirm the mapping, clear the review queue and download the monthly PDF, with
 the worker running (`npm run worker`).
 
@@ -124,6 +133,7 @@ the worker running (`npm run worker`).
 | `KEY_PROVIDER` | `local` (development, uses `MASTER_KEY`) or `kms` (AWS KMS, arrives with the deployment phase) |
 | `MASTER_KEY` | Development only: base64 of 32 random bytes |
 | `LOG_LEVEL` | pino level (default `info`; tests are silent) |
+| `BILLING_ISSUER_NAME`, `BILLING_ISSUER_ADDRESS`, `BILLING_ISSUER_EMAIL` | ClaimHive's details at the top of statements (default name: ClaimHive Inc.) |
 | `ANTHROPIC_API_KEY` | Optional. Turns on the AI letter writer; without it ClaimHive uses its standard letter |
 | `ANTHROPIC_MODEL` | Optional. Defaults to `claude-opus-5-5` |
 | `ANTHROPIC_BAA` | Production only: set to `signed` once the agreement with Anthropic is in place. Until then, real practices get the standard letter. In development, only synthetic practices use the API |
@@ -134,6 +144,7 @@ the worker running (`npm run worker`).
 - [ ] ADA license for CDT code descriptors (the labels here are ClaimHive's own paraphrases)
 - [ ] Nonce-based Content-Security-Policy, replacing `'unsafe-inline'` scripts
 - [ ] Anthropic API use under a signed BAA (and zero data retention if available) before setting `ANTHROPIC_BAA=signed`. The code already sends de-identified content only
+- [ ] Real contingency terms in the admin console (the seed's 20% is a development default) and ClaimHive's billing details (`BILLING_ISSUER_*`)
 - [ ] Security review / penetration test; backup and restore drill; incident response runbook
 
 ## Documentation

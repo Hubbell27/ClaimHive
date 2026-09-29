@@ -27,6 +27,7 @@ export interface MergeStats {
   deniedCents: number;
   paidCents: number;
   recoveredCents: number;
+  reversedCents: number; // taken back by insurers on corrected remittances
   problems: ParseProblem[];
   /** Every claim created or updated, for follow-up (pre-submission re-checks, protected credit). */
   claimIds: string[];
@@ -143,7 +144,7 @@ export async function mergeClaims(
   tx: TenantTx, keys: PracticeKeys, claims: NormalizedClaim[],
   opts: { batchId?: string; isSynthetic: boolean; now?: Date; /** claims about to be sent (pre-submission check) */ asDraft?: boolean },
 ): Promise<MergeStats> {
-  const stats: MergeStats = { created: 0, updated: 0, skipped: 0, deniedCents: 0, paidCents: 0, recoveredCents: 0, problems: [], claimIds: [] };
+  const stats: MergeStats = { created: 0, updated: 0, skipped: 0, deniedCents: 0, paidCents: 0, recoveredCents: 0, reversedCents: 0, problems: [], claimIds: [] };
   const results: ResultInput[] = [];
 
   for (const c of claims) {
@@ -238,9 +239,17 @@ export async function mergeClaims(
             attachment: existing.appealAttachments.find(isAttachment), ruleId: existing.appealRuleKey ?? undefined,
           },
           occurredAt: newAt ?? opts.now ?? new Date(), sourceBatchId: opts.batchId, isSynthetic: opts.isSynthetic,
+          seqKey: `paid:${totals.paid}`, // a second partial payment on the same claim is its own event
         });
         stats.recoveredCents += increase;
       } else {
+        // A corrected remittance that pays less than a recovery we recorded: the insurer took money back.
+        if (existing.recoveredCents > 0 && totals.paid < existing.paidCents) {
+          const taken = Math.min(existing.paidCents - totals.paid, existing.recoveredCents);
+          results.push(...await reversalsFor(tx, existing.id, existing.payerId, taken, totals.paid, newAt ?? opts.now ?? new Date(), opts));
+          data.recoveredCents = existing.recoveredCents - taken;
+          stats.reversedCents += taken;
+        }
         // First (or replacement) adjudication: this remittance is the claim's current state.
         data.paidCents = totals.paid;
         data.status = statusOf(c);
@@ -263,6 +272,34 @@ export async function mergeClaims(
   }
   await recordResults(tx, results);
   return stats;
+}
+
+/** Splits a take-back across the claim's recoveries, newest first, each linked to the one it reverses. */
+async function reversalsFor(tx: TenantTx, claimId: string, payerId: string, amount: number, paidAfter: number, at: Date,
+  opts: { batchId?: string; isSynthetic?: boolean }): Promise<ResultInput[]> {
+  const events = await tx.resultEvent.findMany({ where: { claimId, kind: { in: ["recovered", "reversed"] } }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }] });
+  const reversedAlready = new Map<string, number>();
+  for (const e of events.filter((x) => x.kind === "reversed")) {
+    const of = (e.evidence as { reversesEventId?: string }).reversesEventId ?? "";
+    reversedAlready.set(of, (reversedAlready.get(of) ?? 0) + e.amountCents);
+  }
+  const payer = (await tx.payer.findUnique({ where: { id: payerId }, select: { name: true } }))?.name;
+  const out: ResultInput[] = [];
+  let left = amount;
+  for (const e of events.filter((x) => x.kind === "recovered")) {
+    if (left <= 0) break;
+    const open = e.amountCents - (reversedAlready.get(e.id) ?? 0);
+    if (open <= 0) continue;
+    const take = Math.min(open, left);
+    left -= take;
+    const ev = e.evidence as { cdtCodes?: string[] };
+    out.push({
+      practiceId: tx.practiceId, claimId, kind: "reversed", amountCents: take, attributed: e.attributed, method: "insurer_reversal",
+      evidence: { payer, cdtCodes: ev.cdtCodes, reversesEventId: e.id, reversesMethod: e.method },
+      occurredAt: at, sourceBatchId: opts.batchId, isSynthetic: opts.isSynthetic, seqKey: `paid:${paidAfter}|${e.id}`,
+    });
+  }
+  return out;
 }
 
 function mergeAttachments(a: string[], b: Attachment[] | undefined): string[] {
