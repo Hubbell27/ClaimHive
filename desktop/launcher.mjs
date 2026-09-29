@@ -91,7 +91,9 @@ function pgRunning() {
 
 function startPg() {
   if (pgRunning()) return;
-  run(exe("pg_ctl"), ["-D", PGDATA, "-l", path.join(LOGS, "postgres.log"), "-w", "-t", "90", "start"]);
+  // No pipes: on Windows the server can inherit pg_ctl's output handles, and waiting on those would never end.
+  const r = spawnSync(exe("pg_ctl"), ["-D", PGDATA, "-l", path.join(LOGS, "postgres.log"), "-w", "-t", "90", "start"], { windowsHide: true, stdio: "ignore" });
+  if (r.status !== 0 || !pgRunning()) throw new Error(`the demo database didn't start (see ${path.join(LOGS, "postgres.log")})`);
 }
 
 function stopPg() {
